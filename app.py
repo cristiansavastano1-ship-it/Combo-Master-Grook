@@ -1,6 +1,6 @@
 
 """
-Combo Master Grook — v4.6
+Combo Master Grook — v4.7
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
 """
 
@@ -67,7 +67,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.6</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.7</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -87,11 +87,17 @@ LEAGUES = {
     "Bundesliga (Germania)": "D1",
     "Ligue 1 (Francia)": "F1",
     "Eredivisie (Olanda)": "N1",
+    "Champions League (UEFA)": "CL",
+    "Europa League (UEFA)": "EL",
 }
+# football-data.org competition codes
 API_CODICI = {
     "I1": "SA", "I2": "SB", "E0": "PL", "E1": "ELC",
     "SP1": "PD", "D1": "BL1", "F1": "FL1", "N1": "DED",
+    "CL": "CL", "EL": "EL",
 }
+# Divisione europee: niente CSV su football-data.co.uk → storico da football-data.org
+EURO_DIVS = {"CL", "EL"}
 # ID leghe API-Football (api-sports.io) — free tier: 100 req/giorno
 API_FOOTBALL_LEAGUE_ID = {
     "I1": 135,   # Serie A
@@ -102,6 +108,8 @@ API_FOOTBALL_LEAGUE_ID = {
     "D1": 78,    # Bundesliga
     "F1": 61,    # Ligue 1
     "N1": 88,    # Eredivisie
+    "CL": 2,     # UEFA Champions League
+    "EL": 3,     # UEFA Europa League
 }
 BASE_URL = "https://football-data.co.uk"
 API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
@@ -112,10 +120,10 @@ ELO_SCALE = 400.0
 FORM_N = 6              # ultime N partite per la forma
 FORM_BLEND = 0.25       # peso forma recente sui λ (0=off)
 UNDERSTAT_PATHS = ("data/understat_xg.csv", "understat_xg.csv")
-UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.6)"}
+UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.7)"}
 N_STAGIONI = 3
 N_STAGIONI_TEST = 5
-VERSIONE_TEST = 10  # invalida cache test quando cambia la struttura
+VERSIONE_TEST = 11  # invalida cache test quando cambia la struttura
 W_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
 FINESTRA_GIORNI = 1000
 PASSO_BACKTEST = 14
@@ -282,7 +290,65 @@ def _leggi_csv(url: str):
 
 
 @st.cache_data(ttl=6 * 3600)
-def carica_storico(div: str, n_stagioni: int, giorno: str):
+def carica_storico_europeo(div: str, n_stagioni: int, giorno: str, chiave: str):
+    """
+    Champions / Europa: storico da football-data.org (non c'è CSV su football-data.co.uk).
+    Serve FOOTBALL_DATA_API_KEY. Ritorna DataFrame stesso schema delle leghe nazionali.
+    """
+    if not chiave:
+        return None
+    codice = API_CODICI.get(div, div)
+    oggi = date.today()
+    anno = oggi.year if oggi.month >= 7 else oggi.year - 1
+    frames = []
+    for k in range(n_stagioni + 1):  # +1 per avere abbastanza partite
+        y = anno - k
+        try:
+            res = requests.get(
+                f"https://api.football-data.org/v4/competitions/{codice}/matches",
+                headers={"X-Auth-Token": chiave},
+                params={"season": y, "status": "FINISHED"},
+                timeout=25,
+            )
+            if res.status_code != 200:
+                continue
+            matches = (res.json() or {}).get("matches") or []
+            rows = []
+            for m in matches:
+                h = (m.get("homeTeam") or {}).get("name") or (m.get("homeTeam") or {}).get("shortName")
+                a = (m.get("awayTeam") or {}).get("name") or (m.get("awayTeam") or {}).get("shortName")
+                ft = ((m.get("score") or {}).get("fullTime") or {})
+                gh, ga = ft.get("home"), ft.get("away")
+                if not h or not a or gh is None or ga is None:
+                    continue
+                rows.append({
+                    "Date": m.get("utcDate"),
+                    "HomeTeam": h,
+                    "AwayTeam": a,
+                    "FTHG": int(gh),
+                    "FTAG": int(ga),
+                    "Stag": y,
+                })
+            if rows:
+                frames.append(pd.DataFrame(rows))
+        except Exception:
+            continue
+    if not frames:
+        return None
+    df = pd.concat(frames, ignore_index=True)
+    df["Date"] = pd.to_datetime(df["Date"], utc=True, errors="coerce").dt.tz_convert(None)
+    df = df.dropna(subset=["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"])
+    df["FTHG"] = df["FTHG"].astype(int)
+    df["FTAG"] = df["FTAG"].astype(int)
+    return df.sort_values("Date").reset_index(drop=True)
+
+
+@st.cache_data(ttl=6 * 3600)
+def carica_storico(div: str, n_stagioni: int, giorno: str, chiave: str = ""):
+    """Storico nazionale (CSV football-data.co.uk) o europeo (API football-data.org)."""
+    if div in EURO_DIVS:
+        return carica_storico_europeo(div, n_stagioni, giorno, chiave or "")
+
     oggi = date.today()
     anno = oggi.year if oggi.month >= 7 else oggi.year - 1
     frames = []
@@ -1028,12 +1094,12 @@ def _logloss_holdout_veloce(df_tune, df_hold, ridge, halflife):
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner="Ottimizzo i parametri (griglia leggera)...")
-def parametri_auto(div: str, giorno: str):
+def parametri_auto(div: str, giorno: str, chiave: str = ""):
     """
     Griglia RIDOTTA (3×3) + hold-out veloce.
     Prima versione faceva 25–50 walk-forward completi → su Streamlit Cloud sembrava bloccata.
     """
-    df = carica_storico(div, N_STAGIONI, giorno)
+    df = carica_storico(div, N_STAGIONI, giorno, chiave)
     default = {"ridge": 2.0, "halflife": 365, "log_loss": None, "log_loss_holdout": None, "ricerca": [], "auto": False}
     if df is None or df["Stag"].nunique() < 2:
         return default
@@ -1078,16 +1144,16 @@ def parametri_auto(div: str, giorno: str):
 
 
 @st.cache_data(ttl=6 * 3600)
-def modello_corrente(div, ridge, halflife, giorno):
-    df = carica_storico(div, N_STAGIONI, giorno)
+def modello_corrente(div, ridge, halflife, giorno, chiave: str = ""):
+    df = carica_storico(div, N_STAGIONI, giorno, chiave)
     if df is None or len(df) < 100:
         return None
     return adatta_modello(df, pd.Timestamp.now().normalize(), ridge, halflife, True)
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
-def backtest_cached(div, ridge, halflife, passo, giorno):
-    df = carica_storico(div, N_STAGIONI, giorno)
+def backtest_cached(div, ridge, halflife, passo, giorno, chiave: str = ""):
+    df = carica_storico(div, N_STAGIONI, giorno, chiave)
     return None if df is None else esegui_backtest_df(df, ridge, halflife, True, passo)
 
 
@@ -1403,19 +1469,19 @@ def tabelle_test(res):
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
-def test_completo_cached(div, ridge, halflife, passo, giorno, versione):
-    df = carica_storico(div, N_STAGIONI_TEST, giorno)
+def test_completo_cached(div, ridge, halflife, passo, giorno, versione, chiave: str = ""):
+    df = carica_storico(div, N_STAGIONI_TEST, giorno, chiave)
     return None if df is None else esegui_test_completo(df, ridge, halflife, passo)
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner="Calcolo pesi modello ↔ frequenze...")
-def pesi_blend_auto(div, ridge, halflife, giorno):
+def pesi_blend_auto(div, ridge, halflife, giorno, chiave: str = ""):
     """
     Pesi blend con test LEGGERO (3 stagioni, passo largo).
     Se troppo lento/vuoto → default sicuri 50% gol / 100% esatti sul modello.
     """
     default = {"gol": 0.5, "esatto": 1.0, "n": 0, "auto": False}
-    df = carica_storico(div, N_STAGIONI, giorno)  # 3 stagioni, non 5
+    df = carica_storico(div, N_STAGIONI, giorno, chiave)  # 3 stagioni, non 5
     if df is None or len(df) < 200:
         return default
     try:
@@ -1486,7 +1552,7 @@ st.sidebar.markdown("### ⚙ Configurazione")
 chiave_api = st.sidebar.text_input(
     "🔑 football-data.org (calendario)", value=_chiave_default, type="password",
 )
-st.sidebar.caption("Calendario completo delle giornate.")
+st.sidebar.caption("Calendario + storico Champions/Europa (obbligatoria per CL/EL).")
 chiave_af = st.sidebar.text_input(
     "🔑 API-Football / api-sports (quote)", value=_af_default, type="password",
 )
@@ -1512,13 +1578,20 @@ st.sidebar.info(
 st.sidebar.caption(f"Versione test cache: {VERSIONE_TEST}")
 
 giorno = date.today().isoformat()
-df_storico = carica_storico(div, N_STAGIONI, giorno)
-if df_storico is None or len(df_storico) < 100:
-    st.warning("Impossibile scaricare lo storico da football-data.co.uk (o dati insufficienti). Riprova tra poco.")
+df_storico = carica_storico(div, N_STAGIONI, giorno, chiave_api)
+if df_storico is None or len(df_storico) < 80:
+    if div in EURO_DIVS:
+        st.error(
+            "Champions / Europa League richiedono la chiave **football-data.org** "
+            "(storico non disponibile su football-data.co.uk). "
+            "Inseriscila in sidebar o nei Secrets: FOOTBALL_DATA_API_KEY"
+        )
+    else:
+        st.warning("Impossibile scaricare lo storico da football-data.co.uk (o dati insufficienti). Riprova tra poco.")
     st.stop()
 
-par = parametri_auto(div, giorno)
-modello = modello_corrente(div, par["ridge"], par["halflife"], giorno)
+par = parametri_auto(div, giorno, chiave_api)
+modello = modello_corrente(div, par["ridge"], par["halflife"], giorno, chiave_api)
 if modello is None:
     st.warning("Modello non addestrabile (dati insufficienti).")
     st.stop()
@@ -1540,7 +1613,7 @@ fx, fx_err = carica_fixtures(div)
 oggi_ts = pd.Timestamp.now().normalize()
 calendario, fonte_cal = costruisci_calendario(div, df_storico, fx, chiave_api, modello["squadre"])
 
-pesi = pesi_blend_auto(div, par["ridge"], par["halflife"], giorno)
+pesi = pesi_blend_auto(div, par["ridge"], par["halflife"], giorno, chiave_api)
 M_freq_live = matrice_frequenze(df_storico)
 
 # Quote: 1) fixtures.csv  2) API-Football (sovrascrive se presenti)
@@ -2016,7 +2089,7 @@ with tab_backtest:
 
     if st.button("🚀 Esegui Backtest"):
         with st.spinner("Calcolo in corso..."):
-            st.session_state["bt"] = backtest_cached(div, par["ridge"], par["halflife"], PASSO_BACKTEST, giorno)
+            st.session_state["bt"] = backtest_cached(div, par["ridge"], par["halflife"], PASSO_BACKTEST, giorno, chiave_api)
             st.session_state["bt_div"] = div
 
     bt = st.session_state.get("bt") if st.session_state.get("bt_div") == div else None
@@ -2077,9 +2150,7 @@ with tab_backtest:
 
     if st.button("🧪 Esegui test completo"):
         with st.spinner("Calcolo in corso (può richiedere 1–2 minuti)..."):
-            st.session_state["tc"] = test_completo_cached(
-                div, par["ridge"], par["halflife"], PASSO_BACKTEST, giorno, VERSIONE_TEST
-            )
+            st.session_state["tc"] = test_completo_cached(div, par["ridge"], par["halflife"], PASSO_BACKTEST, giorno, VERSIONE_TEST, chiave_api)
             st.session_state["tc_div"] = div
 
     tc = st.session_state.get("tc") if st.session_state.get("tc_div") == div else None
