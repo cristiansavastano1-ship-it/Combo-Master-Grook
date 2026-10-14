@@ -1,6 +1,5 @@
-
 """
-Combo Master Grook — v4.9
+Combo Master Grook — v4.8
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
 """
 
@@ -67,7 +66,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.9</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.8</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -120,10 +119,10 @@ ELO_SCALE = 400.0
 FORM_N = 6              # ultime N partite per la forma
 FORM_BLEND = 0.25       # peso forma recente sui λ (0=off)
 UNDERSTAT_PATHS = ("data/understat_xg.csv", "understat_xg.csv")
-UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.9)"}
+UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.8)"}
 N_STAGIONI = 3
 N_STAGIONI_TEST = 5
-VERSIONE_TEST = 13  # invalida cache test quando cambia la struttura
+VERSIONE_TEST = 12  # invalida cache test quando cambia la struttura
 W_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
 FINESTRA_GIORNI = 1000
 PASSO_BACKTEST = 14
@@ -1785,49 +1784,6 @@ def distribuzione(casa, trasf):
     }
 
 
-
-def ritardi_squadra(df, squadra: str, max_look=20):
-    """
-    Ritardi recenti: partite consecutive senza segnare, senza subire, senza BTTS, under 2.5, ecc.
-    Conta all'indietro dall'ultima partita giocata.
-    """
-    if df is None or squadra is None:
-        return {}
-    d = df[(df["HomeTeam"] == squadra) | (df["AwayTeam"] == squadra)].sort_values("Date")
-    if d.empty:
-        return {}
-    d = d.tail(max_look)
-    out = {}
-
-    def streak(pred):
-        n = 0
-        for _, r in d.iloc[::-1].iterrows():
-            if pred(r):
-                n += 1
-            else:
-                break
-        return n
-
-    out["non_segna"] = streak(
-        lambda r: (r["HomeTeam"] == squadra and r["FTHG"] == 0)
-        or (r["AwayTeam"] == squadra and r["FTAG"] == 0)
-    )
-    out["non_subisce"] = streak(
-        lambda r: (r["HomeTeam"] == squadra and r["FTAG"] == 0)
-        or (r["AwayTeam"] == squadra and r["FTHG"] == 0)
-    )
-    out["no_btts"] = streak(lambda r: r["FTHG"] == 0 or r["FTAG"] == 0)
-    out["under25"] = streak(lambda r: (r["FTHG"] + r["FTAG"]) <= 2)
-    out["over25"] = streak(lambda r: (r["FTHG"] + r["FTAG"]) >= 3)
-    out["non_vince"] = streak(
-        lambda r: not (
-            (r["HomeTeam"] == squadra and r["FTHG"] > r["FTAG"])
-            or (r["AwayTeam"] == squadra and r["FTAG"] > r["FTHG"])
-        )
-    )
-    return out
-
-
 def gol_attesi(M):
     return (
         float((M.sum(axis=1) * np.arange(M.shape[0])).sum()),
@@ -1982,38 +1938,6 @@ def mostra_analisi(casa, trasf, data, ora):
     u4.metric("Goal (BTTS)", f"{mg['btts']*100:.1f}%", f"Equa: {1/mg['btts']:.2f}")
     u5.metric("No Goal", f"{(1-mg['btts'])*100:.1f}%", f"Equa: {1/(1-mg['btts']):.2f}")
 
-    # --- Ritardi squadre (stile "scheda giornata") ---
-    st.markdown("#### ⏱️ Ritardi squadre")
-    rc = ritardi_squadra(df_storico, casa)
-    rt = ritardi_squadra(df_storico, trasf)
-    if rc or rt:
-        r1, r2 = st.columns(2)
-        with r1:
-            st.markdown(f"**{casa}**")
-            if rc:
-                st.write(
-                    f"- Non segna da **{rc.get('non_segna', 0)}** partite\n"
-                    f"- Non subisce da **{rc.get('non_subisce', 0)}**\n"
-                    f"- Under 2.5 da **{rc.get('under25', 0)}** · Over 2.5 da **{rc.get('over25', 0)}**\n"
-                    f"- No BTTS da **{rc.get('no_btts', 0)}** · Non vince da **{rc.get('non_vince', 0)}**"
-                )
-            else:
-                st.caption("Nessuno storico recente")
-        with r2:
-            st.markdown(f"**{trasf}**")
-            if rt:
-                st.write(
-                    f"- Non segna da **{rt.get('non_segna', 0)}** partite\n"
-                    f"- Non subisce da **{rt.get('non_subisce', 0)}**\n"
-                    f"- Under 2.5 da **{rt.get('under25', 0)}** · Over 2.5 da **{rt.get('over25', 0)}**\n"
-                    f"- No BTTS da **{rt.get('no_btts', 0)}** · Non vince da **{rt.get('non_vince', 0)}**"
-                )
-            else:
-                st.caption("Nessuno storico recente")
-        st.caption("I ritardi sono descrittivi, non un segnale automatico di scommessa.")
-    else:
-        st.caption("Ritardi non disponibili per queste squadre.")
-
     st.markdown("#### 🎯 Top 3 Risultati Esatti")
     st.caption(
         "Solo informativi: in backtest il 1° esatto esce ~10–16% delle volte. "
@@ -2028,69 +1952,52 @@ def mostra_analisi(casa, trasf, data, ora):
         st.caption("⚠ Una squadra senza storico (es. neopromossa) è trattata come media di lega.")
 
 
-# --- CALENDARIO / VISTA GIORNATA ---
+# --- CALENDARIO ---
 with tab_calendario:
-    st.subheader("📅 Vista giornata")
-    st.caption(f"Fonte calendario: {fonte_cal} · % = vostro modello (Dixon-Coles + prior)")
+    st.caption(f"Fonte: {fonte_cal}")
     if calendario.empty:
         st.info("Nessuna partita disponibile.")
     else:
         giornate = sorted(g for g in calendario["Giornata"].unique() if g)
         non_giocate = calendario[calendario["Stato"] != "FINISHED"]
-        g_def = int(non_giocate["Giornata"].min()) if not non_giocate.empty and pd.notna(non_giocate["Giornata"].min()) else int(giornate[-1])
-        cc1, cc2 = st.columns([1, 1])
+        g_def = int(non_giocate["Giornata"].min()) if not non_giocate.empty and non_giocate["Giornata"].min() else int(giornate[-1])
+        cc1, cc2 = st.columns(2)
         cc1.selectbox("🏆 Torneo", [campionato], key="cal_torneo")
         giornata_sel = cc2.selectbox(
             "📅 Giornata", giornate,
             index=giornate.index(g_def) if g_def in giornate else 0,
             key="cal_giornata",
         )
-        block = calendario[calendario["Giornata"] == giornata_sel].reset_index(drop=True)
-        st.markdown(f"**{len(block)} partite** · clicca **Scheda** per dettagli, multigol e ritardi")
-
-        for idx, row in block.iterrows():
-            casa, trasf = row["Casa"], row["Trasferta"]
-            gc = row["GolC"] if pd.notna(row["GolC"]) else None
-            gt = row["GolT"] if pd.notna(row["GolT"]) else None
-            finita = row.get("Stato") == "FINISHED" and gc is not None
-            # % rapide modello
-            try:
-                lh, la, _, _, _, _ = lambda_full(
-                    modello, casa, trasf, elo_map, form_map, ELO_BLEND_LIVE, FORM_BLEND_LIVE
-                )
-                mk = mercati(matrice_punteggi(lh, la, modello["rho"]))
-                p1, px, p2 = mk["p1"] * 100, mk["px"] * 100, mk["p2"] * 100
-                o25 = mk["over2.5"] * 100
-                btts = mk["btts"] * 100
-            except Exception:
-                p1 = px = p2 = o25 = btts = float("nan")
-
-            c_left, c_mid, c_btn = st.columns([2.2, 3.2, 0.9])
-            with c_left:
-                if finita:
-                    st.markdown(f"**{casa}** {int(gc)}-{int(gt)} **{trasf}**")
-                    st.caption(f"{row['Data']} {row['Ora']} · conclusa")
-                else:
-                    st.markdown(f"**{casa}** vs **{trasf}**")
-                    st.caption(f"{row['Data']} · {row['Ora']}")
-            with c_mid:
-                if not (p1 != p1):  # not nan
-                    st.caption(
-                        f"1 **{p1:.0f}%** · X **{px:.0f}%** · 2 **{p2:.0f}%**"
-                        f"  ·  O2.5 **{o25:.0f}%** · BTTS **{btts:.0f}%**"
-                    )
-                else:
-                    st.caption("Probabilità non calcolabili")
-            with c_btn:
-                if st.button("Scheda", key=f"btn_{div}_{giornata_sel}_{idx}"):
-                    st.session_state["match_attivo"] = {
-                        "div": div, "casa": casa, "trasf": trasf,
-                        "data": row["Data"], "ora": row["Ora"],
-                    }
-
+        for idx, row in calendario[calendario["Giornata"] == giornata_sel].iterrows():
+            gc = row["GolC"] if pd.notna(row["GolC"]) else "-"
+            gt = row["GolT"] if pd.notna(row["GolT"]) else "-"
+            gc = int(gc) if gc != "-" else gc
+            gt = int(gt) if gt != "-" else gt
+            st.markdown(
+                f"""
+                <div style="background:#111827; padding:16px; border-radius:12px; border:1px solid #1f2937;
+                            margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <span style="font-weight:700; font-size:1.02rem; color:#f3f4f6;">{row['Casa']}</span>
+                        <span style="color:#94a3b8; margin:0 6px;">vs</span>
+                        <span style="font-weight:700; font-size:1.02rem; color:#f3f4f6;">{row['Trasferta']}</span><br>
+                        <span style="color:#64748b; font-size:12px;">📅 {row['Data']} ore {row['Ora']}</span>
+                    </div>
+                    <div style="text-align:right;">
+                        <span style="background:#1e293b; color:#38bdf8; padding:5px 12px; border-radius:8px;
+                                     font-weight:700; font-size:1.05rem;">{gc} - {gt}</span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("📊 Analizza Match", key=f"btn_{div}_{idx}"):
+                st.session_state["match_attivo"] = {
+                    "div": div, "casa": row["Casa"], "trasf": row["Trasferta"],
+                    "data": row["Data"], "ora": row["Ora"],
+                }
     att_m = st.session_state.get("match_attivo")
     if att_m and att_m.get("div") == div:
-        st.divider()
         mostra_analisi(att_m["casa"], att_m["trasf"], att_m["data"], att_m["ora"])
 
 
