@@ -1,6 +1,5 @@
-
 """
-Combo Master Grook — v4.7
+Combo Master Grook — v4.8
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
 """
 
@@ -67,7 +66,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.7</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.8</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -120,10 +119,10 @@ ELO_SCALE = 400.0
 FORM_N = 6              # ultime N partite per la forma
 FORM_BLEND = 0.25       # peso forma recente sui λ (0=off)
 UNDERSTAT_PATHS = ("data/understat_xg.csv", "understat_xg.csv")
-UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.7)"}
+UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.8)"}
 N_STAGIONI = 3
 N_STAGIONI_TEST = 5
-VERSIONE_TEST = 11  # invalida cache test quando cambia la struttura
+VERSIONE_TEST = 12  # invalida cache test quando cambia la struttura
 W_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
 FINESTRA_GIORNI = 1000
 PASSO_BACKTEST = 14
@@ -289,57 +288,157 @@ def _leggi_csv(url: str):
     return None, "codifica non riconosciuta"
 
 
-@st.cache_data(ttl=6 * 3600)
+def _pulisci_nome_openfootball(nome: str) -> str:
+    """Toglie nazione tra parentesi e suffissi FC/CF comuni."""
+    n = re.sub(r"\s*\([A-Z]{3}\)\s*", " ", nome or "").strip()
+    n = re.sub(r"\s+", " ", n)
+    return n
+
+
+def _parse_openfootball_txt(text: str, stag: int) -> pd.DataFrame:
+    """
+    Parser del formato Football.TXT (openfootball):
+      21:00  Team A (ITA)  v Team B (ENG)  1-3 (0-1)
+    """
+    rows = []
+    # data corrente mentre scorre il file
+    data_cur = None
+    # linee tipo: Tue Sep 17 2024  oppure  Wed Oct 2
+    re_data = re.compile(
+        r"^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+"
+        r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
+        r"(\d{1,2})(?:\s+(\d{4}))?",
+        re.I,
+    )
+    mesi = {m: i for i, m in enumerate(
+        ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], 1)}
+    # match: opzionale orario, home v away, score
+    re_match = re.compile(
+        r"(?:\d{1,2}:\d{2}\s+)?"
+        r"(.+?)\s+v\s+(.+?)\s+"
+        r"(\d+)\s*[-–]\s*(\d+)"
+        r"(?:\s*\([^)]*\))?",
+        re.I,
+    )
+    anno = stag
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("=") or line.startswith("▪"):
+            continue
+        md = re_data.match(line)
+        if md:
+            mese, giorno, y = md.group(1), int(md.group(2)), md.group(3)
+            if y:
+                anno = int(y)
+            try:
+                data_cur = date(anno, mesi[mese[:1].upper() + mese[1:3].lower()], giorno)
+                # fix month key: Jan -> Jan
+                mi = mesi.get(mese.capitalize()) or mesi.get(mese.title())
+                if mi is None:
+                    for k, v in mesi.items():
+                        if k.lower() == mese.lower():
+                            mi = v
+                            break
+                if mi:
+                    data_cur = date(anno, mi, giorno)
+            except Exception:
+                pass
+            continue
+        mm = re_match.search(line)
+        if not mm or data_cur is None:
+            continue
+        home = _pulisci_nome_openfootball(mm.group(1))
+        away = _pulisci_nome_openfootball(mm.group(2))
+        try:
+            gh, ga = int(mm.group(3)), int(mm.group(4))
+        except ValueError:
+            continue
+        if not home or not away:
+            continue
+        rows.append({
+            "Date": pd.Timestamp(data_cur),
+            "HomeTeam": home,
+            "AwayTeam": away,
+            "FTHG": gh,
+            "FTAG": ga,
+            "Stag": stag,
+        })
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner="Scarico storico europeo (openfootball, gratis)...")
 def carica_storico_europeo(div: str, n_stagioni: int, giorno: str, chiave: str):
     """
-    Champions / Europa: storico da football-data.org (non c'è CSV su football-data.co.uk).
-    Serve FOOTBALL_DATA_API_KEY. Ritorna DataFrame stesso schema delle leghe nazionali.
+    Champions / Europa League — GRATIS via openfootball (GitHub).
+    Fallback opzionale: football-data.org se hai la chiave.
+    Non serve piano a pagamento.
     """
-    if not chiave:
-        return None
-    codice = API_CODICI.get(div, div)
     oggi = date.today()
     anno = oggi.year if oggi.month >= 7 else oggi.year - 1
+    file_name = "cl.txt" if div == "CL" else "el.txt"
     frames = []
-    for k in range(n_stagioni + 1):  # +1 per avere abbastanza partite
+
+    # 1) openfootball (nessuna chiave)
+    for k in range(max(n_stagioni, 2) + 1):
         y = anno - k
+        # stagioni tipo 2024-25
+        slug = f"{y}-{str(y+1)[2:]}"
+        url = f"https://raw.githubusercontent.com/openfootball/champions-league/master/{slug}/{file_name}"
         try:
-            res = requests.get(
-                f"https://api.football-data.org/v4/competitions/{codice}/matches",
-                headers={"X-Auth-Token": chiave},
-                params={"season": y, "status": "FINISHED"},
-                timeout=25,
-            )
-            if res.status_code != 200:
+            res = requests.get(url, timeout=25, headers=UA)
+            if res.status_code != 200 or len(res.text) < 200:
                 continue
-            matches = (res.json() or {}).get("matches") or []
-            rows = []
-            for m in matches:
-                h = (m.get("homeTeam") or {}).get("name") or (m.get("homeTeam") or {}).get("shortName")
-                a = (m.get("awayTeam") or {}).get("name") or (m.get("awayTeam") or {}).get("shortName")
-                ft = ((m.get("score") or {}).get("fullTime") or {})
-                gh, ga = ft.get("home"), ft.get("away")
-                if not h or not a or gh is None or ga is None:
-                    continue
-                rows.append({
-                    "Date": m.get("utcDate"),
-                    "HomeTeam": h,
-                    "AwayTeam": a,
-                    "FTHG": int(gh),
-                    "FTAG": int(ga),
-                    "Stag": y,
-                })
-            if rows:
-                frames.append(pd.DataFrame(rows))
+            d = _parse_openfootball_txt(res.text, y)
+            if d is not None and len(d) >= 10:
+                frames.append(d)
         except Exception:
             continue
+
+    # 2) fallback football-data.org (se chiave e openfootball insufficiente)
+    if len(frames) < 1 and chiave:
+        codice = API_CODICI.get(div, div)
+        for k in range(n_stagioni + 1):
+            y = anno - k
+            try:
+                res = requests.get(
+                    f"https://api.football-data.org/v4/competitions/{codice}/matches",
+                    headers={"X-Auth-Token": chiave},
+                    params={"season": y, "status": "FINISHED"},
+                    timeout=25,
+                )
+                if res.status_code != 200:
+                    continue
+                matches = (res.json() or {}).get("matches") or []
+                rows = []
+                for m in matches:
+                    h = (m.get("homeTeam") or {}).get("name")
+                    a = (m.get("awayTeam") or {}).get("name")
+                    ft = ((m.get("score") or {}).get("fullTime") or {})
+                    gh, ga = ft.get("home"), ft.get("away")
+                    if not h or not a or gh is None or ga is None:
+                        continue
+                    rows.append({
+                        "Date": m.get("utcDate"),
+                        "HomeTeam": h,
+                        "AwayTeam": a,
+                        "FTHG": int(gh),
+                        "FTAG": int(ga),
+                        "Stag": y,
+                    })
+                if rows:
+                    frames.append(pd.DataFrame(rows))
+            except Exception:
+                continue
+
     if not frames:
         return None
     df = pd.concat(frames, ignore_index=True)
-    df["Date"] = pd.to_datetime(df["Date"], utc=True, errors="coerce").dt.tz_convert(None)
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"])
     df["FTHG"] = df["FTHG"].astype(int)
     df["FTAG"] = df["FTAG"].astype(int)
+    # dedup
+    df = df.drop_duplicates(subset=["Date", "HomeTeam", "AwayTeam"], keep="last")
     return df.sort_values("Date").reset_index(drop=True)
 
 
@@ -1552,7 +1651,7 @@ st.sidebar.markdown("### ⚙ Configurazione")
 chiave_api = st.sidebar.text_input(
     "🔑 football-data.org (calendario)", value=_chiave_default, type="password",
 )
-st.sidebar.caption("Calendario + storico Champions/Europa (obbligatoria per CL/EL).")
+st.sidebar.caption("Calendario. Per CL/EL lo storico è gratis (openfootball); questa chiave è solo extra.")
 chiave_af = st.sidebar.text_input(
     "🔑 API-Football / api-sports (quote)", value=_af_default, type="password",
 )
@@ -1582,9 +1681,9 @@ df_storico = carica_storico(div, N_STAGIONI, giorno, chiave_api)
 if df_storico is None or len(df_storico) < 80:
     if div in EURO_DIVS:
         st.error(
-            "Champions / Europa League richiedono la chiave **football-data.org** "
-            "(storico non disponibile su football-data.co.uk). "
-            "Inseriscila in sidebar o nei Secrets: FOOTBALL_DATA_API_KEY"
+            "Impossibile caricare lo storico Champions/Europa (openfootball). "
+            "Riprova tra poco o verifica la connessione. "
+            "La chiave football-data.org è **opzionale** (fallback)."
         )
     else:
         st.warning("Impossibile scaricare lo storico da football-data.co.uk (o dati insufficienti). Riprova tra poco.")
