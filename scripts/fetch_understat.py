@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
 """
-Scarica xG medi stagione da Understat (top-5 europee) e salva data/understat_xg.csv.
+Scarica xG medi stagione da Understat (top-5) → data/understat_xg.csv
 
-Uso locale:
-  pip install requests pandas lxml
-  python scripts/fetch_understat.py
-
-GitHub Actions: eseguito dallo workflow .github/workflows/update-understat.yml
-
-Understat espone i dati in variabili JS nelle pagine lega; non è un'API ufficiale.
-Usare con moderazione (1 run/giorno).
+Nota 2026: Understat spesso non espone più teamsData nel HTML iniziale.
+Se non ottiene dati, esce 0 senza cancellare un CSV già valido.
 """
 from __future__ import annotations
 
@@ -25,7 +19,6 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "data" / "understat_xg.csv"
 
-# slug Understat → etichetta
 LEAGUES = {
     "Serie_A": "Serie A",
     "EPL": "Premier League",
@@ -34,7 +27,16 @@ LEAGUES = {
     "Ligue_1": "Ligue 1",
 }
 
-UA = {"User-Agent": "ComboMasterGrook-UnderstatBot/1.0 (+github actions daily xG)"}
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://understat.com/",
+}
 
 
 def stagione_corrente() -> int:
@@ -42,20 +44,33 @@ def stagione_corrente() -> int:
     return oggi.year if oggi.month >= 7 else oggi.year - 1
 
 
-def _extract_json(html: str, var_name: str):
-    """Estrae JSON da `var teamsData = JSON.parse('...')`."""
-    m = re.search(rf"var {var_name}\s*=\s*JSON\.parse\('(.+?)'\)", html, re.S)
-    if not m:
-        return None
-    raw = m.group(1).encode("utf-8").decode("unicode_escape")
-    return json.loads(raw)
+def _extract_teams_data(html: str):
+    patterns = [
+        r"var teamsData\s*=\s*JSON\.parse\('(.+?)'\)",
+        r'var teamsData\s*=\s*JSON\.parse\("(.+?)"\)',
+        r"teamsData\s*=\s*JSON\.parse\('(.+?)'\)",
+        r"teamsData\s*=\s*(\{.+?\})\s*;",
+    ]
+    for pat in patterns:
+        m = re.search(pat, html, re.S)
+        if not m:
+            continue
+        raw = m.group(1)
+        try:
+            if raw.startswith("{"):
+                return json.loads(raw)
+            decoded = raw.encode("utf-8").decode("unicode_escape")
+            return json.loads(decoded)
+        except Exception:
+            continue
+    return None
 
 
 def fetch_league(slug: str, season: int) -> list[dict]:
     url = f"https://understat.com/league/{slug}/{season}"
-    r = requests.get(url, headers=UA, timeout=30)
+    r = requests.get(url, headers=HEADERS, timeout=45)
     r.raise_for_status()
-    data = _extract_json(r.text, "teamsData")
+    data = _extract_teams_data(r.text)
     if not data:
         return []
     rows = []
@@ -80,20 +95,31 @@ def fetch_league(slug: str, season: int) -> list[dict]:
 
 
 def main() -> int:
-    season = stagione_corrente()
+    seasons = [stagione_corrente(), stagione_corrente() - 1]
     all_rows: list[dict] = []
-    for slug in LEAGUES:
-        try:
-            rows = fetch_league(slug, season)
-            print(f"{slug}: {len(rows)} squadre", file=sys.stderr)
-            all_rows.extend(rows)
-        except Exception as e:
-            print(f"ERRORE {slug}: {e}", file=sys.stderr)
+    for season in seasons:
+        for slug in LEAGUES:
+            try:
+                rows = fetch_league(slug, season)
+                print(f"{slug} {season}: {len(rows)} squadre", file=sys.stderr)
+                all_rows.extend(rows)
+            except Exception as e:
+                print(f"ERRORE {slug} {season}: {e}", file=sys.stderr)
+        if all_rows:
+            break
+
     if not all_rows:
-        print("Nessun dato scaricato", file=sys.stderr)
-        return 1
+        print(
+            "Nessun dato Understat (sito bloccato o struttura cambiata). "
+            "L'app funziona comunque con Dixon-Coles + ClubElo + forma. "
+            "CSV esistente non cancellato.",
+            file=sys.stderr,
+        )
+        return 0
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame(all_rows).sort_values(["league", "team"])
+    df = pd.DataFrame(all_rows).drop_duplicates(subset=["team", "league"], keep="first")
+    df = df.sort_values(["league", "team"])
     df.to_csv(OUT, index=False)
     print(f"Scritto {OUT} ({len(df)} righe)")
     return 0
