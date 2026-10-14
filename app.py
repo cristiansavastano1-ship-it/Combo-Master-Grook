@@ -1,6 +1,5 @@
-
 """
-Combo Master Grook — v4.4
+Combo Master Grook — v4.5
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
 """
 
@@ -67,7 +66,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.4</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.5</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -112,10 +111,10 @@ ELO_SCALE = 400.0
 FORM_N = 6              # ultime N partite per la forma
 FORM_BLEND = 0.25       # peso forma recente sui λ (0=off)
 UNDERSTAT_PATHS = ("data/understat_xg.csv", "understat_xg.csv")
-UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.4)"}
+UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.5)"}
 N_STAGIONI = 3
 N_STAGIONI_TEST = 5
-VERSIONE_TEST = 8  # invalida cache test quando cambia la struttura
+VERSIONE_TEST = 9  # invalida cache test quando cambia la struttura
 W_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
 FINESTRA_GIORNI = 1000
 PASSO_BACKTEST = 14
@@ -1004,13 +1003,34 @@ def tabella_calibrazione(bt, bins=10):
     return pd.DataFrame(righe)
 
 
-# ======================= PARAMETRI AUTOMATICI (con hold-out) =======================
-@st.cache_data(ttl=6 * 3600, show_spinner="Ottimizzo i parametri (griglia + hold-out)...")
+# ======================= PARAMETRI AUTOMATICI (veloce + hold-out) =======================
+def _logloss_holdout_veloce(df_tune, df_hold, ridge, halflife):
+    """Un solo fit sul tune, valutazione sull'hold-out (molto più veloce del walk-forward)."""
+    if df_hold is None or len(df_hold) < 20 or df_tune is None or len(df_tune) < 100:
+        return None
+    t0 = df_hold["Date"].min()
+    m = adatta_modello(df_tune, t0, ridge, halflife, True)
+    if m is None:
+        return None
+    ps, ys = [], []
+    for _, r in df_hold.iterrows():
+        try:
+            lh, la = lambda_partita(m, r["HomeTeam"], r["AwayTeam"])
+            mk = mercati(matrice_punteggi(lh, la, m["rho"]))
+            ps.append([mk["p1"], mk["px"], mk["p2"]])
+            ys.append(0 if r["FTHG"] > r["FTAG"] else (1 if r["FTHG"] == r["FTAG"] else 2))
+        except Exception:
+            continue
+    if len(ys) < 20:
+        return None
+    return _ll_brier(np.asarray(ps, float), np.asarray(ys, int))[0]
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner="Ottimizzo i parametri (griglia leggera)...")
 def parametri_auto(div: str, giorno: str):
     """
-    Griglia su shrinkage × emivita.
-    Selezione sul walk-forward delle stagioni intermedie;
-    l'ultima stagione resta fuori (hold-out) per una stima meno ottimistica.
+    Griglia RIDOTTA (3×3) + hold-out veloce.
+    Prima versione faceva 25–50 walk-forward completi → su Streamlit Cloud sembrava bloccata.
     """
     df = carica_storico(div, N_STAGIONI, giorno)
     default = {"ridge": 2.0, "halflife": 365, "log_loss": None, "log_loss_holdout": None, "ricerca": [], "auto": False}
@@ -1018,7 +1038,6 @@ def parametri_auto(div: str, giorno: str):
         return default
 
     stagioni = sorted(df["Stag"].unique())
-    # hold-out = ultima stagione se ce ne sono almeno 3
     if len(stagioni) >= 3:
         df_tune = df[df["Stag"] < stagioni[-1]]
         df_hold = df[df["Stag"] == stagioni[-1]]
@@ -1026,22 +1045,16 @@ def parametri_auto(div: str, giorno: str):
         df_tune = df
         df_hold = None
 
+    # griglia leggera: 9 punti, passo più largo
+    passo_veloce = max(PASSO_PARAM, 42)
     ricerca = []
-    for r_ in (0.5, 1.5, 2.0, 4.0, 6.0):
-        for h_ in (120, 180, 365, 540, 0):
-            bt = esegui_backtest_df(df_tune, r_, h_, True, PASSO_PARAM)
-            if bt.empty or len(bt) < 50:
+    for r_ in (1.5, 2.0, 4.0):
+        for h_ in (180, 365, 0):
+            bt = esegui_backtest_df(df_tune, r_, h_, True, passo_veloce)
+            if bt.empty or len(bt) < 40:
                 continue
             ll = metriche_backtest(bt)["modello"][0]
-            ll_h = None
-            if df_hold is not None and len(df_hold) > 40:
-                # valuta i parametri scelti sull'hold-out (modello addestrato solo su tune)
-                bt_h = esegui_backtest_df(pd.concat([df_tune, df_hold]), r_, h_, True, PASSO_PARAM)
-                # tieni solo le righe dell'hold-out
-                if not bt_h.empty:
-                    mask = bt_h["Date"] >= df_hold["Date"].min()
-                    if mask.sum() >= 20:
-                        ll_h = metriche_backtest(bt_h[mask])["modello"][0]
+            ll_h = _logloss_holdout_veloce(df_tune, df_hold, r_, h_)
             ricerca.append({
                 "Shrinkage λ": r_, "Emivita (gg)": str(h_) if h_ else "nessuna",
                 "Log loss (tune)": round(ll, 4),
@@ -1052,13 +1065,12 @@ def parametri_auto(div: str, giorno: str):
     if not ricerca:
         return default
 
-    # scegli per hold-out se disponibile, altrimenti tune
     best = min(ricerca, key=lambda z: z["_ll_h"])
     return {
         "ridge": best["_r"],
         "halflife": best["_h"],
         "log_loss": best["_ll"],
-        "log_loss_holdout": best["_ll_h"] if best["_ll_h"] != best["_ll"] else None,
+        "log_loss_holdout": best["_ll_h"] if best.get("_ll_h") != best["_ll"] else None,
         "auto": True,
         "ricerca": [{k: v for k, v in z.items() if not k.startswith("_")} for z in ricerca],
     }
@@ -1397,10 +1409,20 @@ def test_completo_cached(div, ridge, halflife, passo, giorno, versione):
 
 @st.cache_data(ttl=6 * 3600, show_spinner="Calcolo pesi modello ↔ frequenze...")
 def pesi_blend_auto(div, ridge, halflife, giorno):
-    df = carica_storico(div, N_STAGIONI_TEST, giorno)
-    res = esegui_test_completo(df, ridge, halflife, PASSO_PARAM, solo_base=True) if df is not None else None
-    if res is None or len(res["xs"]) < 100:
-        return {"gol": 0.5, "esatto": 0.75, "n": 0, "auto": False}
+    """
+    Pesi blend con test LEGGERO (3 stagioni, passo largo).
+    Se troppo lento/vuoto → default sicuri 50% gol / 100% esatti sul modello.
+    """
+    default = {"gol": 0.5, "esatto": 1.0, "n": 0, "auto": False}
+    df = carica_storico(div, N_STAGIONI, giorno)  # 3 stagioni, non 5
+    if df is None or len(df) < 200:
+        return default
+    try:
+        res = esegui_test_completo(df, ridge, halflife, max(PASSO_PARAM, 42), solo_base=True)
+    except Exception:
+        return default
+    if res is None or len(res.get("xs", [])) < 80:
+        return default
     w = pesi_ottimi(res)
     w["auto"] = True
     return w
