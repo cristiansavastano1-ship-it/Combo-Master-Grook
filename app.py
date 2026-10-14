@@ -1,6 +1,6 @@
 
 """
-Combo Master Grook — v4.3
+Combo Master Grook — v4.4
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
 """
 
@@ -67,7 +67,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.3</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.4</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -112,10 +112,10 @@ ELO_SCALE = 400.0
 FORM_N = 6              # ultime N partite per la forma
 FORM_BLEND = 0.25       # peso forma recente sui λ (0=off)
 UNDERSTAT_PATHS = ("data/understat_xg.csv", "understat_xg.csv")
-UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.3)"}
+UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.4)"}
 N_STAGIONI = 3
 N_STAGIONI_TEST = 5
-VERSIONE_TEST = 7  # invalida cache test quando cambia la struttura
+VERSIONE_TEST = 8  # invalida cache test quando cambia la struttura
 W_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
 FINESTRA_GIORNI = 1000
 PASSO_BACKTEST = 14
@@ -132,15 +132,71 @@ _STOP_NOMI = {
     "fsv", "tsg", "fk", "cd", "ca", "sc", "bv", "de", "calcio", "ogc", "sco",
 }
 _ALIAS_NOMI = {
-    "inter": "internazionale milano", "verona": "hellas verona",
-    "man united": "manchester united", "man city": "manchester city",
-    "nott m forest": "nottingham forest", "wolves": "wolverhampton wanderers",
-    "ath madrid": "club atletico madrid", "ath bilbao": "athletic club",
-    "espanol": "espanyol barcelona", "bayern munich": "bayern munchen",
-    "m gladbach": "borussia monchengladbach", "ein frankfurt": "eintracht frankfurt",
-    "paris sg": "paris saint germain", "lyon": "olympique lyonnais",
-    "rennes": "stade rennais", "brest": "stade brestois",
-    "for sittard": "fortuna sittard",
+    # Italia
+    "inter": "inter", "internazionale": "inter",
+    "verona": "hellas verona", "hellas verona": "hellas verona",
+    "milan": "milan", "ac milan": "milan",
+    "roma": "roma", "as roma": "roma",
+    "lazio": "lazio", "napoli": "napoli", "juventus": "juventus",
+    "atalanta": "atalanta", "fiorentina": "fiorentina",
+    "bologna": "bologna", "torino": "torino", "genoa": "genoa",
+    "udinese": "udinese", "cagliari": "cagliari", "lecce": "lecce",
+    "parma": "parma", "como": "como", "monza": "monza",
+    "venezia": "venezia", "empoli": "empoli", "sassuolo": "sassuolo",
+    "pisa": "pisa", "cremonese": "cremonese", "frosinone": "frosinone",
+    "spezia": "spezia", "palermo": "palermo", "bari": "bari",
+    "catanzaro": "catanzaro", "cesena": "cesena", "modena": "modena",
+    "cittadella": "cittadella", "sudtirol": "sudtirol", "sud tirol": "sudtirol",
+    # Inghilterra
+    "man united": "manchester united", "man utd": "manchester united",
+    "manchester utd": "manchester united", "man city": "manchester city",
+    "nott m forest": "nottingham forest", "nottingham": "nottingham forest",
+    "wolves": "wolverhampton", "wolverhampton wanderers": "wolverhampton",
+    "newcastle": "newcastle", "newcastle united": "newcastle",
+    "west ham": "west ham", "west ham united": "west ham",
+    "tottenham": "tottenham", "spurs": "tottenham",
+    "brighton": "brighton", "brighton and hove albion": "brighton",
+    "leicester": "leicester", "leicester city": "leicester",
+    "southampton": "southampton", "ipswich": "ipswich",
+    "crystal palace": "crystal palace", "fulham": "fulham",
+    "brentford": "brentford", "bournemouth": "bournemouth",
+    "everton": "everton", "aston villa": "aston villa",
+    "chelsea": "chelsea", "arsenal": "arsenal", "liverpool": "liverpool",
+    # Spagna
+    "ath madrid": "atletico", "atletico madrid": "atletico",
+    "ath bilbao": "athletic", "athletic bilbao": "athletic", "athletic club": "athletic",
+    "espanol": "espanyol", "espanyol barcelona": "espanyol",
+    "real madrid": "real madrid", "barcelona": "barcelona", "barca": "barcelona",
+    "sevilla": "sevilla", "real sociedad": "sociedad", "sociedad": "sociedad",
+    "villarreal": "villarreal", "betis": "betis", "real betis": "betis",
+    "valencia": "valencia", "osasuna": "osasuna", "getafe": "getafe",
+    "celta": "celta", "celta vigo": "celta", "mallorca": "mallorca",
+    "girona": "girona", "las palmas": "las palmas", "alaves": "alaves",
+    "rayo vallecano": "rayo vallecano", "leganes": "leganes",
+    # Germania
+    "bayern munich": "bayern", "bayern munchen": "bayern", "bayern": "bayern",
+    "m gladbach": "gladbach", "borussia monchengladbach": "gladbach",
+    "ein frankfurt": "frankfurt", "eintracht frankfurt": "frankfurt",
+    "dortmund": "dortmund", "borussia dortmund": "dortmund",
+    "leverkusen": "leverkusen", "bayer leverkusen": "leverkusen",
+    "rb leipzig": "leipzig", "leipzig": "leipzig",
+    "wolfsburg": "wolfsburg", "stuttgart": "stuttgart",
+    "hoffenheim": "hoffenheim", "freiburg": "freiburg",
+    "werder bremen": "werder", "bremen": "werder",
+    "mainz": "mainz", "augsburg": "augsburg", "union berlin": "union berlin",
+    "heidenheim": "heidenheim", "st pauli": "st pauli", "koln": "koln", "koeln": "koln",
+    # Francia
+    "paris sg": "paris sg", "paris saint germain": "paris sg", "psg": "paris sg",
+    "lyon": "lyon", "olympique lyonnais": "lyon",
+    "marseille": "marseille", "olympique marseille": "marseille",
+    "monaco": "monaco", "lille": "lille", "nice": "nice",
+    "rennes": "rennes", "lens": "lens", "nantes": "nantes",
+    "strasbourg": "strasbourg", "toulouse": "toulouse", "brest": "brest",
+    "reims": "reims", "montpellier": "montpellier", "auxerre": "auxerre",
+    # Olanda
+    "ajax": "ajax", "psv": "psv", "psv eindhoven": "psv",
+    "feyenoord": "feyenoord", "az": "az", "az alkmaar": "az",
+    "twente": "twente", "utrecht": "utrecht", "vitesse": "vitesse",
 }
 
 
@@ -268,28 +324,28 @@ def carica_fixtures(div: str):
 @st.cache_data(ttl=12 * 3600, show_spinner="Scarico rating ClubElo (cache 12h)...")
 def carica_clubelo(giorno: str):
     """
-    Rating Elo ufficiali ClubElo per tutte le squadre europee.
-    Fonte: http://api.clubelo.com/YYYY-MM-DD — CSV, nessuna chiave.
-    Ritorna DataFrame con colonne Club, Elo, Country, Level (+ nome normalizzato).
+    Rating Elo ClubElo per TUTTE le squadre europee (non solo Serie A).
+    Fonte: api.clubelo.com/YYYY-MM-DD — CSV, nessuna chiave.
     """
-    # prova oggi, ieri, 2 giorni fa (weekend / ritardi)
     base = date.fromisoformat(giorno) if isinstance(giorno, str) else date.today()
-    for delta in range(0, 5):
+    bases = [CLUBELO_URL, CLUBELO_URL.replace("http://", "https://")]
+    for delta in range(0, 7):
         d = (base - pd.Timedelta(days=delta)).strftime("%Y-%m-%d")
-        try:
-            res = requests.get(f"{CLUBELO_URL}/{d}", timeout=20, headers=UA)
-            if res.status_code != 200 or not res.text or "Club" not in res.text[:200]:
+        for base_url in bases:
+            try:
+                res = requests.get(f"{base_url}/{d}", timeout=35, headers=UA)
+                if res.status_code != 200 or not res.text or "Club" not in res.text[:300]:
+                    continue
+                df = pd.read_csv(io.StringIO(res.text))
+                if "Club" not in df.columns or "Elo" not in df.columns:
+                    continue
+                df = df.dropna(subset=["Club", "Elo"]).copy()
+                df["Elo"] = pd.to_numeric(df["Elo"], errors="coerce")
+                df = df.dropna(subset=["Elo"])
+                df["norm"] = df["Club"].map(_norm_sq)
+                return df.reset_index(drop=True)
+            except Exception:
                 continue
-            df = pd.read_csv(io.StringIO(res.text))
-            if "Club" not in df.columns or "Elo" not in df.columns:
-                continue
-            df = df.dropna(subset=["Club", "Elo"]).copy()
-            df["Elo"] = pd.to_numeric(df["Elo"], errors="coerce")
-            df = df.dropna(subset=["Elo"])
-            df["norm"] = df["Club"].map(_norm_sq)
-            return df.reset_index(drop=True)
-        except Exception:
-            continue
     return pd.DataFrame()
 
 
@@ -306,7 +362,7 @@ def mappa_elo(squadre, df_elo):
             s = _similarita(ns, n)
             if s > best_s:
                 best, best_s, best_e = raw, s, float(e)
-        if best is not None and best_s >= 0.72:
+        if best is not None and best_s >= 0.65:
             out[sq] = {"elo": best_e, "club_elo_name": best, "sim": round(best_s, 2)}
     return out
 
