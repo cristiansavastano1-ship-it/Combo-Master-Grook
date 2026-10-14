@@ -5,22 +5,33 @@ on:
     - cron: "0 6 * * *"
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install deps
         run: pip install requests pandas
+
       - name: Fetch Understat xG
         run: python scripts/fetch_understat.py
+
       - name: Commit if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/understat_xg.csv
-          git diff --staged --quiet || git commit -m "chore: update understat xG $(date -u +%Y-%m-%d)"
-          git push
+          git add data/understat_xg.csv || true
+          if git diff --staged --quiet; then
+            echo "Nessuna modifica al CSV"
+          else
+            git commit -m "chore: update understat xG $(date -u +%Y-%m-%d)"
+            git push
+          fi
