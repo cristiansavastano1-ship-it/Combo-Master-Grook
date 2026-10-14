@@ -1,5 +1,6 @@
+
 """
-COMBO Master Pro AI — v4
+Combo Master Grook — v4
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
 """
 
@@ -21,7 +22,7 @@ from scipy.special import expit, gammaln
 
 # --- CONFIGURAZIONE PAGINA ---
 st.set_page_config(
-    page_title="COMBO Master Pro AI v4",
+    page_title="Combo Master Grook",
     layout="wide",
     page_icon="⚽",
 )
@@ -65,7 +66,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER PRO AI <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -90,8 +91,20 @@ API_CODICI = {
     "I1": "SA", "I2": "SB", "E0": "PL", "E1": "ELC",
     "SP1": "PD", "D1": "BL1", "F1": "FL1", "N1": "DED",
 }
+# ID leghe API-Football (api-sports.io) — free tier: 100 req/giorno
+API_FOOTBALL_LEAGUE_ID = {
+    "I1": 135,   # Serie A
+    "I2": 136,   # Serie B
+    "E0": 39,    # Premier League
+    "E1": 40,    # Championship
+    "SP1": 140,  # La Liga
+    "D1": 78,    # Bundesliga
+    "F1": 61,    # Ligue 1
+    "N1": 88,    # Eredivisie
+}
 BASE_URL = "https://football-data.co.uk"
-UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterPro/4.0)"}
+API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
+UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.0)"}
 N_STAGIONI = 3
 N_STAGIONI_TEST = 5
 VERSIONE_TEST = 4  # invalida cache test quando cambia la struttura
@@ -239,6 +252,117 @@ def carica_fixtures(div: str):
     if "Date" in d.columns:
         d["Date"] = pd.to_datetime(d["Date"], dayfirst=True, errors="coerce", format="mixed")
     return d.reset_index(drop=True), None
+
+
+
+def _stagione_api_football() -> int:
+    """Stagione calcistica corrente (es. ott 2026 → 2026)."""
+    oggi = date.today()
+    return oggi.year if oggi.month >= 7 else oggi.year - 1
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner="Scarico quote da API-Football (cache 6h)...")
+def scarica_odds_api_football(div: str, api_key: str, giorno: str):
+    """
+    Quote 1X2 e O/U 2.5 per il prossimo turno.
+    Strategia a basso consumo (free = 100 req/giorno):
+      1) /fixtures?league&season&next=12  → 1 req
+      2) /odds?fixture=id per al massimo 8 partite  → fino a 8 req
+    Totale ≤ 9 req per lega, cache 6 ore. 8 leghe ≈ 72 req/giorno nel worst case.
+    Ritorna dict {(home_norm, away_norm): (p1x2, p_over25|None, home, away)}.
+    """
+    if not api_key or div not in API_FOOTBALL_LEAGUE_ID:
+        return {}
+    league_id = API_FOOTBALL_LEAGUE_ID[div]
+    season = _stagione_api_football()
+    headers = {"x-apisports-key": api_key}
+    out = {}
+    try:
+        r = requests.get(
+            f"{API_FOOTBALL_BASE}/fixtures",
+            headers=headers,
+            params={"league": league_id, "season": season, "next": 12},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            return {}
+        fixtures = (r.json() or {}).get("response") or []
+        for fx in fixtures[:8]:
+            fid = (fx.get("fixture") or {}).get("id")
+            teams = fx.get("teams") or {}
+            home = (teams.get("home") or {}).get("name") or ""
+            away = (teams.get("away") or {}).get("name") or ""
+            if not fid or not home or not away:
+                continue
+            try:
+                ro = requests.get(
+                    f"{API_FOOTBALL_BASE}/odds",
+                    headers=headers,
+                    params={"fixture": fid},
+                    timeout=15,
+                )
+            except Exception:
+                continue
+            if ro.status_code != 200:
+                continue
+            payload = (ro.json() or {}).get("response") or []
+            if not payload:
+                continue
+            vals_1, vals_x, vals_2 = [], [], []
+            vals_over, vals_under = [], []
+            for item in payload:
+                for b in (item.get("bookmakers") or []):
+                    for bet in (b.get("bets") or []):
+                        name = (bet.get("name") or "").lower()
+                        for v in (bet.get("values") or []):
+                            lab = (v.get("value") or "").strip().lower()
+                            try:
+                                odd = float(v.get("odd"))
+                            except (TypeError, ValueError):
+                                continue
+                            if odd <= 1.0:
+                                continue
+                            if name in ("match winner", "home/away", "1x2"):
+                                if lab in ("home", "1"):
+                                    vals_1.append(odd)
+                                elif lab in ("draw", "x"):
+                                    vals_x.append(odd)
+                                elif lab in ("away", "2"):
+                                    vals_2.append(odd)
+                            elif "over/under" in name:
+                                lab2 = lab.replace(" ", "")
+                                if lab2 in ("over2.5",):
+                                    vals_over.append(odd)
+                                elif lab2 in ("under2.5",):
+                                    vals_under.append(odd)
+            if vals_1 and vals_x and vals_2:
+                q = [float(np.mean(vals_1)), float(np.mean(vals_x)), float(np.mean(vals_2))]
+                p1x2 = senza_margine(q)
+                p_ou = None
+                if vals_over and vals_under:
+                    p_ou = float(senza_margine([float(np.mean(vals_over)), float(np.mean(vals_under))])[0])
+                out[(_norm_sq(home), _norm_sq(away))] = (p1x2, p_ou, home, away)
+    except Exception:
+        pass
+    return out
+
+
+def _match_quote_api(api_odds: dict, casa: str, trasf: str):
+    """Trova quote API per una partita confrontando nomi normalizzati."""
+    if not api_odds:
+        return None
+    nc, nt = _norm_sq(casa), _norm_sq(trasf)
+    # match esatto
+    if (nc, nt) in api_odds:
+        p1x2, p_ou, _, _ = api_odds[(nc, nt)]
+        return p1x2, p_ou
+    # fuzzy
+    best, best_s = None, 0.0
+    for (ah, aa), (p1x2, p_ou, _, _) in api_odds.items():
+        s = 0.5 * (_similarita(nc, ah) + _similarita(nt, aa))
+        if s > best_s:
+            best, best_s = (p1x2, p_ou), s
+    return best if best is not None and best_s >= 0.78 else None
 
 
 @st.cache_data(ttl=3600)
@@ -1019,14 +1143,27 @@ try:
     _chiave_default = st.secrets.get("FOOTBALL_DATA_API_KEY", "")
 except Exception:
     _chiave_default = ""
+try:
+    _af_default = st.secrets.get("API_FOOTBALL_KEY", "")
+except Exception:
+    _af_default = ""
 
 st.sidebar.markdown("### ⚙ Configurazione")
-chiave_api = st.sidebar.text_input("🔑 API Key football-data.org (facoltativa)", value=_chiave_default, type="password")
-st.sidebar.caption("Con la chiave: calendario completo. Senza: partite giocate + prossimo turno.")
+chiave_api = st.sidebar.text_input(
+    "🔑 football-data.org (calendario)", value=_chiave_default, type="password",
+)
+st.sidebar.caption("Calendario completo delle giornate.")
+chiave_af = st.sidebar.text_input(
+    "🔑 API-Football / api-sports (quote)", value=_af_default, type="password",
+)
+st.sidebar.caption(
+    "Quote 1X2 e O/U pre-match. Free = 100 req/giorno. "
+    "Cache 6h → ~1 richiesta per lega ogni 6 ore."
+)
 st.sidebar.markdown("---")
 st.sidebar.info(
-    "💡 Parametri (shrinkage, emivita, pesi blend) scelti automaticamente "
-    "con griglia + hold-out sull'ultima stagione. Nessuna impostazione manuale."
+    "💡 Parametri (shrinkage, emivita, pesi blend) automatici "
+    "con griglia + hold-out. Quote: API-Football → fixtures.csv → solo modello."
 )
 st.sidebar.caption(f"Versione test cache: {VERSIONE_TEST}")
 
@@ -1048,23 +1185,49 @@ calendario, fonte_cal = costruisci_calendario(div, df_storico, fx, chiave_api, m
 
 pesi = pesi_blend_auto(div, par["ridge"], par["halflife"], giorno)
 M_freq_live = matrice_frequenze(df_storico)
+
+# Quote: 1) fixtures.csv  2) API-Football (sovrascrive se presenti)
 quote_fixtures = {}
+fonte_quote = "nessuna"
 if fx is not None:
     for _, _r in fx.iterrows():
-        _q, _qo = prima_tripla(_r, COL_PRESA), prima_coppia(_r, COL_OU_PRESA)
-        if _q and _qo:
-            quote_fixtures[(_r["HomeTeam"], _r["AwayTeam"])] = (senza_margine(_q), float(senza_margine(_qo)[0]))
+        _q = prima_tripla(_r, COL_PRESA)
+        _qo = prima_coppia(_r, COL_OU_PRESA)
+        if _q:
+            p_ou = float(senza_margine(_qo)[0]) if _qo else None
+            quote_fixtures[(_r["HomeTeam"], _r["AwayTeam"])] = (senza_margine(_q), p_ou)
+            fonte_quote = "football-data.co.uk (fixtures.csv)"
+
+api_odds = {}
+if chiave_af:
+    api_odds = scarica_odds_api_football(div, chiave_af, giorno)
+    if api_odds:
+        fonte_quote = "API-Football" if not quote_fixtures else "API-Football + fixtures.csv"
+        # integra: se match già in quote_fixtures, aggiorna; altrimenti aggiungi via fuzzy dopo
+
+
+def _risolvi_quote(casa, trasf):
+    """Priorità: fixtures.csv esatto → API-Football (nome normalizzato) → None."""
+    q = quote_fixtures.get((casa, trasf))
+    if q is not None:
+        return q[0], q[1], "fixtures.csv"
+    aq = _match_quote_api(api_odds, casa, trasf)
+    if aq is not None:
+        return aq[0], aq[1], "API-Football"
+    return None, None, None
 
 
 def distribuzione(casa, trasf):
     lh, la = lambda_partita(modello, casa, trasf)
     Mb = matrice_punteggi(lh, la, modello["rho"])
-    q = quote_fixtures.get((casa, trasf))
-    if q is not None:
-        Ma = matrice_ancorata(q[0], q[1], modello["rho"], (lh, la))
+    p1x2, p_ou, src = _risolvi_quote(casa, trasf)
+    if p1x2 is not None:
+        # se manca O/U, ancora solo su 1X2 (p_over25=None)
+        Ma = matrice_ancorata(p1x2, p_ou, modello["rho"], (lh, la))
+        extra = "1X2 + O/U 2.5" if p_ou is not None else "solo 1X2"
         return {
             "M_1x2": Ma, "M_gol": Ma, "M_es": Ma, "ancorata": True,
-            "fonte": "ancorata alle quote reali (1X2 + Over/Under 2.5)",
+            "fonte": f"ancorata alle quote reali ({extra}, fonte: {src})",
         }
     Mg = pesi["gol"] * Mb + (1 - pesi["gol"]) * M_freq_live
     Me = pesi["esatto"] * Mb + (1 - pesi["esatto"]) * M_freq_live
@@ -1084,16 +1247,23 @@ def gol_attesi(M):
     )
 
 
-# Value finder
+# Value finder (fixtures.csv; se assenti quote CSV ma presenti API, le usiamo ricostruendo quote da p)
 righe_val = []
+viste = set()
 if fx is not None:
     for _, r in fx.iterrows():
         if "Date" in r and pd.notna(r["Date"]) and r["Date"] < oggi_ts:
             continue
-        q = prima_tripla(r, COL_PRESA)
-        if not q:
-            continue
         casa, trasf = r["HomeTeam"], r["AwayTeam"]
+        viste.add((casa, trasf))
+        q = prima_tripla(r, COL_PRESA)
+        p1x2_api, p_ou_api, src = None, None, None
+        if not q:
+            p1x2_api, p_ou_api, src = _risolvi_quote(casa, trasf)
+            if p1x2_api is None:
+                continue
+            # ricostruisci quote "equivalenti" dalle probabilità di mercato (per edge vs modello)
+            q = [1.0 / max(p, 1e-6) for p in p1x2_api]
         lh, la = lambda_partita(modello, casa, trasf)
         mk = mercati(matrice_punteggi(lh, la, modello["rho"]))
         P = np.array([mk["p1"], mk["px"], mk["p2"]])
@@ -1109,6 +1279,27 @@ if fx is not None:
             "Quota_Book": round(q[k], 2), "Edge": round((P[k] * q[k] - 1) * 100, 1),
             "Nota": "⚠ senza storico" if (casa not in modello["idx"] or trasf not in modello["idx"]) else "",
         })
+# partite solo da API (non in fixtures.csv)
+for (ah, aa), (p1x2, p_ou, home, away) in (api_odds or {}).items():
+    # skip se già coperta da fixtures con stesso nome normalizzato
+    if any(_norm_sq(c) == ah and _norm_sq(t) == aa for c, t in viste):
+        continue
+    q = [1.0 / max(p, 1e-6) for p in p1x2]
+    lh, la = lambda_partita(modello, home, away)
+    mk = mercati(matrice_punteggi(lh, la, modello["rho"]))
+    P = np.array([mk["p1"], mk["px"], mk["p2"]])
+    pm = p1x2
+    nomi = [f"1 ({home})", "X (Pareggio)", f"2 ({away})"]
+    k = int(np.argmax(P * np.array(q)))
+    righe_val.append({
+        "Data": "",
+        "Partita": f"{home} vs {away}",
+        "Selezione": nomi[k],
+        "P1 %": round(P[0] * 100, 1), "PX %": round(P[1] * 100, 1), "P2 %": round(P[2] * 100, 1),
+        "Prob_Modello": round(P[k] * 100, 1), "Prob_Mercato": round(pm[k] * 100, 1),
+        "Quota_Book": round(q[k], 2), "Edge": round((P[k] * q[k] - 1) * 100, 1),
+        "Nota": "API-Football" if (home in modello["idx"] and away in modello["idx"]) else "⚠ senza storico",
+    })
 df_value = pd.DataFrame(righe_val).sort_values("Edge", ascending=False) if righe_val else pd.DataFrame()
 
 tab_calendario, tab_classifica, tab_value_finder, tab_ai_schedine, tab_monte_carlo, tab_backtest, tab_kelly = st.tabs([
@@ -1290,7 +1481,8 @@ with tab_value_finder:
         )
     else:
         st.caption(
-            "Edge = prob. modello × quota − 1 (media bookmaker). Qui si usa il modello puro: "
+            f"Fonte quote: {fonte_quote}. "
+            "Edge = prob. modello × quota − 1. Qui si usa il modello puro: "
             "con probabilità ancorate alle quote l'edge sarebbe sempre negativo (margine book). "
             "Un edge alto è spesso errore del modello — controlla CLV e calibrazione nel tab Backtest."
         )
