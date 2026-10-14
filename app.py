@@ -1,6 +1,6 @@
 
 """
-Combo Master Grook — v4
+Combo Master Grook — v4.3
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
 """
 
@@ -10,6 +10,7 @@ import math
 import re
 import unicodedata
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -66,7 +67,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.3</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -104,10 +105,17 @@ API_FOOTBALL_LEAGUE_ID = {
 }
 BASE_URL = "https://football-data.co.uk"
 API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
-UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.0)"}
+CLUBELO_URL = "http://api.clubelo.com"  # CSV giornaliero, nessuna API key
+# quanto pesare Elo rispetto al solo Dixon-Coles (0 = ignora, 1 = molto)
+ELO_BLEND = 0.35
+ELO_SCALE = 400.0
+FORM_N = 6              # ultime N partite per la forma
+FORM_BLEND = 0.25       # peso forma recente sui λ (0=off)
+UNDERSTAT_PATHS = ("data/understat_xg.csv", "understat_xg.csv")
+UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.3)"}
 N_STAGIONI = 3
 N_STAGIONI_TEST = 5
-VERSIONE_TEST = 4  # invalida cache test quando cambia la struttura
+VERSIONE_TEST = 7  # invalida cache test quando cambia la struttura
 W_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
 FINESTRA_GIORNI = 1000
 PASSO_BACKTEST = 14
@@ -252,6 +260,253 @@ def carica_fixtures(div: str):
     if "Date" in d.columns:
         d["Date"] = pd.to_datetime(d["Date"], dayfirst=True, errors="coerce", format="mixed")
     return d.reset_index(drop=True), None
+
+
+
+
+# ======================= CLUBELO (gratis, no key) =======================
+@st.cache_data(ttl=12 * 3600, show_spinner="Scarico rating ClubElo (cache 12h)...")
+def carica_clubelo(giorno: str):
+    """
+    Rating Elo ufficiali ClubElo per tutte le squadre europee.
+    Fonte: http://api.clubelo.com/YYYY-MM-DD — CSV, nessuna chiave.
+    Ritorna DataFrame con colonne Club, Elo, Country, Level (+ nome normalizzato).
+    """
+    # prova oggi, ieri, 2 giorni fa (weekend / ritardi)
+    base = date.fromisoformat(giorno) if isinstance(giorno, str) else date.today()
+    for delta in range(0, 5):
+        d = (base - pd.Timedelta(days=delta)).strftime("%Y-%m-%d")
+        try:
+            res = requests.get(f"{CLUBELO_URL}/{d}", timeout=20, headers=UA)
+            if res.status_code != 200 or not res.text or "Club" not in res.text[:200]:
+                continue
+            df = pd.read_csv(io.StringIO(res.text))
+            if "Club" not in df.columns or "Elo" not in df.columns:
+                continue
+            df = df.dropna(subset=["Club", "Elo"]).copy()
+            df["Elo"] = pd.to_numeric(df["Elo"], errors="coerce")
+            df = df.dropna(subset=["Elo"])
+            df["norm"] = df["Club"].map(_norm_sq)
+            return df.reset_index(drop=True)
+        except Exception:
+            continue
+    return pd.DataFrame()
+
+
+def mappa_elo(squadre, df_elo):
+    """Associa ogni squadra del modello al rating Elo più simile (fuzzy)."""
+    if df_elo is None or df_elo.empty:
+        return {}
+    out = {}
+    norms = list(zip(df_elo["norm"].tolist(), df_elo["Elo"].tolist(), df_elo["Club"].tolist()))
+    for sq in squadre:
+        ns = _norm_sq(sq)
+        best, best_s, best_e = None, 0.0, None
+        for n, e, raw in norms:
+            s = _similarita(ns, n)
+            if s > best_s:
+                best, best_s, best_e = raw, s, float(e)
+        if best is not None and best_s >= 0.72:
+            out[sq] = {"elo": best_e, "club_elo_name": best, "sim": round(best_s, 2)}
+    return out
+
+
+def fattore_elo(elo_casa, elo_trasf, scale=ELO_SCALE):
+    """
+    Fattori moltiplicativi su λ casa / λ trasferta basati sulla differenza Elo.
+    delta = +100 → casa segna un po' di più, trasferta un po' di meno.
+    """
+    if elo_casa is None or elo_trasf is None:
+        return 1.0, 1.0
+    # vantaggio tipico ~ home già nel modello; qui solo forza relativa
+    delta = (elo_casa - elo_trasf) / scale
+    # soft: 10^(delta/2) su casa, 10^(-delta/2) su trasferta in scala gol
+    f_h = 10 ** (0.5 * delta * 0.25)  # molto soft
+    f_a = 10 ** (-0.5 * delta * 0.25)
+    return float(f_h), float(f_a)
+
+
+def lambda_con_elo(m, casa, trasf, elo_map, blend=ELO_BLEND):
+    """λ Dixon-Coles eventualmente corrette con ClubElo (blend verso Elo)."""
+    lh, la = lambda_partita(m, casa, trasf)
+    if not elo_map or blend <= 0:
+        return lh, la, None, None
+    ec = (elo_map.get(casa) or {}).get("elo")
+    et = (elo_map.get(trasf) or {}).get("elo")
+    if ec is None and et is None:
+        return lh, la, None, None
+    # se manca un Elo, usa mediana lega ~1500
+    med = 1500.0
+    fh, fa = fattore_elo(ec if ec is not None else med, et if et is not None else med)
+    # blend: λ' = λ^(1-b) * (λ * f)^b  ≈ λ * f^b
+    lh2 = lh * (fh ** blend)
+    la2 = la * (fa ** blend)
+    return lh2, la2, ec, et
+
+
+def forma_recente(df, n=FORM_N):
+    """
+    Media gol fatti/subiti nelle ultime n partite (casa+trasferta mescolate).
+    Ritorna dict squadra -> {gf, gs, n, form_score}.
+    form_score ≈ (gf - gs) medio, shrinkage verso 0.
+    """
+    if df is None or df.empty:
+        return {}
+    d = df.sort_values("Date")
+    out = {}
+    for sq in set(d["HomeTeam"]) | set(d["AwayTeam"]):
+        mask_h = d["HomeTeam"] == sq
+        mask_a = d["AwayTeam"] == sq
+        rows = []
+        for _, r in d[mask_h | mask_a].iterrows():
+            if r["HomeTeam"] == sq:
+                rows.append((r["Date"], int(r["FTHG"]), int(r["FTAG"])))
+            else:
+                rows.append((r["Date"], int(r["FTAG"]), int(r["FTHG"])))
+        rows.sort(key=lambda x: x[0])
+        last = rows[-n:]
+        if not last:
+            continue
+        gf = np.mean([x[1] for x in last])
+        gs = np.mean([x[2] for x in last])
+        k = 2.0  # shrinkage
+        gf_s = (gf * len(last) + k * 1.2) / (len(last) + k)
+        gs_s = (gs * len(last) + k * 1.2) / (len(last) + k)
+        out[sq] = {
+            "gf": round(float(gf_s), 3),
+            "gs": round(float(gs_s), 3),
+            "n": len(last),
+            "form_score": round(float(gf_s - gs_s), 3),
+        }
+    return out
+
+
+def fattore_forma(form_map, casa, trasf):
+    """Fattori soft su λ da forma recente (gol fatti / subiti)."""
+    if not form_map:
+        return 1.0, 1.0, None, None
+    fc, ft = form_map.get(casa), form_map.get(trasf)
+    # baseline lega ~1.2 gol
+    base = 1.2
+    # casa: fatti propri * subiti avversario
+    if fc and ft:
+        exp_h = (fc["gf"] / base) * (ft["gs"] / base)
+        exp_a = (ft["gf"] / base) * (fc["gs"] / base)
+        # clip per non esplodere
+        exp_h = float(np.clip(exp_h, 0.6, 1.6))
+        exp_a = float(np.clip(exp_a, 0.6, 1.6))
+        return exp_h, exp_a, fc, ft
+    return 1.0, 1.0, fc, ft
+
+
+def lambda_full(m, casa, trasf, elo_map, form_map, elo_blend=ELO_BLEND, form_blend=FORM_BLEND):
+    """
+    λ finali = Dixon-Coles × (fattore Elo)^elo_blend × (fattore forma)^form_blend
+    """
+    lh, la = lambda_partita(m, casa, trasf)
+    elo_c = elo_t = None
+    if elo_map and elo_blend > 0:
+        lh, la, elo_c, elo_t = lambda_con_elo(m, casa, trasf, elo_map, elo_blend)
+    ff_h, ff_a, fc, ft = fattore_forma(form_map, casa, trasf)
+    if form_blend > 0 and (fc or ft):
+        lh = lh * (ff_h ** form_blend)
+        la = la * (ff_a ** form_blend)
+    return lh, la, elo_c, elo_t, fc, ft
+
+
+@st.cache_data(ttl=6 * 3600)
+def carica_understat_csv(giorno: str):
+    """
+    Carica xG medi da CSV offline (prodotto da GitHub Actions / script locale).
+    Colonne attese: team, xg_for, xg_against, npx_g_for, matches, league (opzionale).
+    """
+    candidates = []
+    for rel in UNDERSTAT_PATHS:
+        candidates.append(Path(rel))
+        candidates.append(Path.cwd() / rel)
+    try:
+        candidates.append(Path(__file__).resolve().parent / "data" / "understat_xg.csv")
+    except Exception:
+        pass
+    for fp in candidates:
+        try:
+            if not fp.is_file() or fp.stat().st_size < 20:
+                continue
+            df = pd.read_csv(fp)
+        except Exception:
+            continue
+        cols = {c.lower().strip(): c for c in df.columns}
+        team_c = cols.get("team") or cols.get("squadra") or cols.get("name")
+        xgf_c = cols.get("xg_for") or cols.get("xg") or cols.get("xgf")
+        xga_c = cols.get("xg_against") or cols.get("xga")
+        if not team_c or not xgf_c:
+            continue
+        df = df.dropna(subset=[team_c]).copy()
+        if df.empty:
+            continue
+        df["_norm"] = df[team_c].map(_norm_sq)
+        df["_xgf"] = pd.to_numeric(df[xgf_c], errors="coerce")
+        df["_xga"] = pd.to_numeric(df[xga_c], errors="coerce") if xga_c else np.nan
+        out = df.dropna(subset=["_xgf"]).reset_index(drop=True)
+        if not out.empty:
+            return out
+    return pd.DataFrame()
+
+
+def mappa_understat(squadre, df_u):
+    if df_u is None or df_u.empty:
+        return {}
+    norms = list(zip(df_u["_norm"].tolist(), df_u["_xgf"].tolist(),
+                     df_u["_xga"].tolist() if "_xga" in df_u.columns else [np.nan] * len(df_u),
+                     df_u.iloc[:, 0].tolist()))
+    out = {}
+    for sq in squadre:
+        ns = _norm_sq(sq)
+        best_s, best = 0.0, None
+        for n, xgf, xga, raw in norms:
+            s = _similarita(ns, n)
+            if s > best_s:
+                best_s = s
+                best = {"xg_for": float(xgf), "xg_against": float(xga) if np.isfinite(xga) else None,
+                        "name": str(raw), "sim": round(s, 2)}
+        if best and best_s >= 0.72:
+            out[sq] = best
+    return out
+
+
+def fattore_xg(xg_map, casa, trasf):
+    if not xg_map:
+        return 1.0, 1.0
+    hc, ht = xg_map.get(casa), xg_map.get(trasf)
+    base = 1.3
+    if hc and ht and hc.get("xg_for") and ht.get("xg_against"):
+        exp_h = (hc["xg_for"] / base) * ((ht.get("xg_against") or base) / base)
+        exp_a = (ht["xg_for"] / base) * ((hc.get("xg_against") or base) / base)
+        return float(np.clip(exp_h, 0.7, 1.5)), float(np.clip(exp_a, 0.7, 1.5))
+    return 1.0, 1.0
+
+
+def log_matching(squadre, elo_map, xg_map, quote_keys, api_odds):
+    """Tabella debug: copertura Elo / xG / quote per squadra."""
+    rows = []
+    q_teams = set()
+    for a, b in (quote_keys or []):
+        q_teams.add(a)
+        q_teams.add(b)
+    api_teams = set()
+    for (ah, aa), v in (api_odds or {}).items():
+        api_teams.add(v[2] if len(v) > 2 else ah)
+        api_teams.add(v[3] if len(v) > 3 else aa)
+    for sq in sorted(squadre):
+        rows.append({
+            "Squadra": sq,
+            "Elo": round(elo_map[sq]["elo"], 1) if sq in elo_map else "—",
+            "Elo match": elo_map[sq]["sim"] if sq in elo_map else "—",
+            "xG for": round(xg_map[sq]["xg_for"], 2) if sq in xg_map else "—",
+            "In fixtures/quote": "✓" if sq in q_teams else "",
+            "In API odds": "✓" if any(_norm_sq(sq) == _norm_sq(x) for x in api_teams) else "",
+        })
+    return pd.DataFrame(rows)
 
 
 
@@ -1161,9 +1416,19 @@ st.sidebar.caption(
     "Cache 6h → ~1 richiesta per lega ogni 6 ore."
 )
 st.sidebar.markdown("---")
+st.sidebar.markdown("### 🎛 Pesi prior (λ gol)")
+st.sidebar.caption("0 = ignora la fonte · 100 = massimo peso sul modello base")
+elo_blend_ui = st.sidebar.slider("ClubElo %", 0, 100, int(ELO_BLEND * 100), 5, key="blend_elo")
+form_blend_ui = st.sidebar.slider(f"Forma U{FORM_N} %", 0, 100, int(FORM_BLEND * 100), 5, key="blend_form")
+xg_blend_ui = st.sidebar.slider("Understat xG %", 0, 100, 20, 5, key="blend_xg")
+ELO_BLEND_LIVE = elo_blend_ui / 100.0
+FORM_BLEND_LIVE = form_blend_ui / 100.0
+XG_BLEND_LIVE = xg_blend_ui / 100.0
+st.sidebar.markdown("---")
 st.sidebar.info(
-    "💡 Parametri (shrinkage, emivita, pesi blend) automatici "
-    "con griglia + hold-out. Quote: API-Football → fixtures.csv → solo modello."
+    "💡 Parametri auto (shrinkage, emivita). "
+    "Quote: API-Football → fixtures.csv → modello. "
+    "Prior: Elo + forma + xG (pesi qui a sinistra)."
 )
 st.sidebar.caption(f"Versione test cache: {VERSIONE_TEST}")
 
@@ -1178,6 +1443,19 @@ modello = modello_corrente(div, par["ridge"], par["halflife"], giorno)
 if modello is None:
     st.warning("Modello non addestrabile (dati insufficienti).")
     st.stop()
+
+df_elo = carica_clubelo(giorno)
+elo_map = mappa_elo(modello["squadre"], df_elo)
+form_map = forma_recente(df_storico, FORM_N)
+df_xg = carica_understat_csv(giorno)
+xg_map = mappa_understat(modello["squadre"], df_xg)
+
+_fonti = ["football-data.co.uk", f"ClubElo {len(elo_map)}/{len(modello['squadre'])}"]
+_fonti.append(f"Forma U{FORM_N} ({len(form_map)} sq)")
+if xg_map:
+    _fonti.append(f"Understat xG {len(xg_map)}/{len(modello['squadre'])}")
+_fonti.append("API quote" if True else "")
+st.caption("📡 Fonti: " + " · ".join(_fonti))
 
 fx, fx_err = carica_fixtures(div)
 oggi_ts = pd.Timestamp.now().normalize()
@@ -1218,25 +1496,40 @@ def _risolvi_quote(casa, trasf):
 
 
 def distribuzione(casa, trasf):
-    lh, la = lambda_partita(modello, casa, trasf)
+    lh, la, elo_c, elo_t, fc, ft = lambda_full(
+        modello, casa, trasf, elo_map, form_map, ELO_BLEND_LIVE, FORM_BLEND_LIVE
+    )
+    fxg_h, fxg_a = fattore_xg(xg_map, casa, trasf)
+    if xg_map and XG_BLEND_LIVE > 0 and (casa in xg_map or trasf in xg_map):
+        lh, la = lh * (fxg_h ** XG_BLEND_LIVE), la * (fxg_a ** XG_BLEND_LIVE)
     Mb = matrice_punteggi(lh, la, modello["rho"])
     p1x2, p_ou, src = _risolvi_quote(casa, trasf)
+    bits = []
+    if elo_c is not None and elo_t is not None:
+        bits.append(f"ClubElo {elo_c:.0f}–{elo_t:.0f} ({int(ELO_BLEND_LIVE*100)}%)")
+    if fc and ft:
+        bits.append(f"Forma U{FORM_N}: {fc['form_score']:+.2f}/{ft['form_score']:+.2f} ({int(FORM_BLEND_LIVE*100)}%)")
+    if casa in xg_map or trasf in xg_map:
+        bits.append(f"xG ({int(XG_BLEND_LIVE*100)}%)")
+    extra_src = (" · " + " · ".join(bits)) if bits else ""
     if p1x2 is not None:
-        # se manca O/U, ancora solo su 1X2 (p_over25=None)
         Ma = matrice_ancorata(p1x2, p_ou, modello["rho"], (lh, la))
         extra = "1X2 + O/U 2.5" if p_ou is not None else "solo 1X2"
         return {
             "M_1x2": Ma, "M_gol": Ma, "M_es": Ma, "ancorata": True,
-            "fonte": f"ancorata alle quote reali ({extra}, fonte: {src})",
+            "fonte": f"ancorata alle quote ({extra}, {src}){extra_src}",
+            "elo_c": elo_c, "elo_t": elo_t, "form_c": fc, "form_t": ft, "lh": lh, "la": la,
         }
     Mg = pesi["gol"] * Mb + (1 - pesi["gol"]) * M_freq_live
     Me = pesi["esatto"] * Mb + (1 - pesi["esatto"]) * M_freq_live
     return {
         "M_1x2": Mb, "M_gol": Mg, "M_es": Me, "ancorata": False,
         "fonte": (
-            f"modello + frequenze (peso modello: {pesi['gol']*100:.0f}% Goal/Over, "
-            f"{pesi['esatto']*100:.0f}% esatti) – nessuna quota disponibile"
+            f"modello + frequenze + prior (Elo/forma/xG); peso modello "
+            f"{pesi['gol']*100:.0f}% Goal/Over, {pesi['esatto']*100:.0f}% esatti"
+            f"{extra_src} – nessuna quota bookmaker"
         ),
+        "elo_c": elo_c, "elo_t": elo_t, "form_c": fc, "form_t": ft, "lh": lh, "la": la,
     }
 
 
@@ -1262,9 +1555,8 @@ if fx is not None:
             p1x2_api, p_ou_api, src = _risolvi_quote(casa, trasf)
             if p1x2_api is None:
                 continue
-            # ricostruisci quote "equivalenti" dalle probabilità di mercato (per edge vs modello)
             q = [1.0 / max(p, 1e-6) for p in p1x2_api]
-        lh, la = lambda_partita(modello, casa, trasf)
+        lh, la, _, _, _, _ = lambda_full(modello, casa, trasf, elo_map, form_map, ELO_BLEND_LIVE, FORM_BLEND_LIVE)
         mk = mercati(matrice_punteggi(lh, la, modello["rho"]))
         P = np.array([mk["p1"], mk["px"], mk["p2"]])
         pm = senza_margine(q)
@@ -1285,7 +1577,7 @@ for (ah, aa), (p1x2, p_ou, home, away) in (api_odds or {}).items():
     if any(_norm_sq(c) == ah and _norm_sq(t) == aa for c, t in viste):
         continue
     q = [1.0 / max(p, 1e-6) for p in p1x2]
-    lh, la = lambda_partita(modello, home, away)
+    lh, la, _, _, _, _ = lambda_full(modello, home, away, elo_map, form_map, ELO_BLEND_LIVE, FORM_BLEND_LIVE)
     mk = mercati(matrice_punteggi(lh, la, modello["rho"]))
     P = np.array([mk["p1"], mk["px"], mk["p2"]])
     pm = p1x2
@@ -1373,6 +1665,19 @@ def mostra_analisi(casa, trasf, data, ora):
     a1.metric("1 (Casa)", f"{mk['p1']*100:.1f}%", f"Equa: {1/mk['p1']:.2f}")
     a2.metric("X (Pareggio)", f"{mk['px']*100:.1f}%", f"Equa: {1/mk['px']:.2f}")
     a3.metric("2 (Trasferta)", f"{mk['p2']*100:.1f}%", f"Equa: {1/mk['p2']:.2f}")
+    if d.get("elo_c") is not None or d.get("elo_t") is not None:
+        e1, e2, e3 = st.columns(3)
+        e1.metric("ClubElo Casa", f"{d['elo_c']:.0f}" if d.get("elo_c") else "—")
+        e2.metric("Δ Elo", f"{(d.get('elo_c') or 0) - (d.get('elo_t') or 0):+.0f}" if d.get("elo_c") and d.get("elo_t") else "—")
+        e3.metric("ClubElo Trasferta", f"{d['elo_t']:.0f}" if d.get("elo_t") else "—")
+    if d.get("form_c") or d.get("form_t"):
+        f1, f2, f3 = st.columns(3)
+        fc, ft = d.get("form_c") or {}, d.get("form_t") or {}
+        f1.metric(f"Forma casa (U{FORM_N})", f"{fc.get('form_score', 0):+.2f}" if fc else "—",
+                  f"GF {fc.get('gf', '—')} GS {fc.get('gs', '—')}" if fc else None)
+        f2.metric("Δ Forma", f"{(fc.get('form_score') or 0) - (ft.get('form_score') or 0):+.2f}" if fc and ft else "—")
+        f3.metric(f"Forma trasf. (U{FORM_N})", f"{ft.get('form_score', 0):+.2f}" if ft else "—",
+                  f"GF {ft.get('gf', '—')} GS {ft.get('gs', '—')}" if ft else None)
 
     st.markdown("#### ⚽ Under / Over & Goal / No Goal")
     u1, u2, u3, u4, u5 = st.columns(5)
@@ -1461,12 +1766,26 @@ with tab_classifica:
         "Attacco": np.round(modello["att"], 3),
         "Difesa": np.round(-modello["dfn"], 3),
     })
+    df_f["Elo"] = [round(elo_map[s]["elo"], 1) if s in elo_map else None for s in modello["squadre"]]
+    df_f[f"Forma U{FORM_N}"] = [form_map[s]["form_score"] if s in form_map else None for s in modello["squadre"]]
+    df_f["xG for"] = [round(xg_map[s]["xg_for"], 2) if s in xg_map else None for s in modello["squadre"]]
     df_f["Totale"] = (df_f["Attacco"] + df_f["Difesa"]).round(3)
     k1, k2, k3 = st.columns(3)
     k1.metric("Vantaggio casa (×)", f"{math.exp(modello['hm']):.2f}")
     k2.metric("Gol base (media, trasferta)", f"{math.exp(modello['mu']):.2f}")
     k3.metric("ρ Dixon-Coles", f"{modello['rho']:+.3f}")
     st.dataframe(df_f.sort_values("Totale", ascending=False), use_container_width=True, hide_index=True)
+    with st.expander("🔍 Debug matching nomi (Elo / xG / quote)"):
+        st.caption(
+            "Se Elo o xG sono '—', il nome squadra non ha trovato corrispondenza nella fonte. "
+            "Utile per capire perché manca un prior."
+        )
+        log_df = log_matching(
+            modello["squadre"], elo_map, xg_map,
+            list(quote_fixtures.keys()) if quote_fixtures else [],
+            api_odds if "api_odds" in dir() else {},
+        )
+        st.dataframe(log_df, use_container_width=True, hide_index=True)
 
 
 # --- VALUE FINDER ---
