@@ -1,5 +1,6 @@
+
 """
-Combo Master Grook — v4.5
+Combo Master Grook — v4.6
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
 """
 
@@ -66,7 +67,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.5</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.6</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -111,10 +112,10 @@ ELO_SCALE = 400.0
 FORM_N = 6              # ultime N partite per la forma
 FORM_BLEND = 0.25       # peso forma recente sui λ (0=off)
 UNDERSTAT_PATHS = ("data/understat_xg.csv", "understat_xg.csv")
-UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.5)"}
+UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.6)"}
 N_STAGIONI = 3
 N_STAGIONI_TEST = 5
-VERSIONE_TEST = 9  # invalida cache test quando cambia la struttura
+VERSIONE_TEST = 10  # invalida cache test quando cambia la struttura
 W_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
 FINESTRA_GIORNI = 1000
 PASSO_BACKTEST = 14
@@ -1735,9 +1736,9 @@ def mostra_analisi(casa, trasf, data, ora):
     st.markdown(f"<h3>🔬 Poisson / Dixon-Coles · {casa} vs {trasf}</h3>", unsafe_allow_html=True)
     st.caption(f"Fonte Goal / Over / Esatti: {d['fonte']}.")
     if not d["ancorata"]:
-        st.warning(
-            "⚠ Senza quote bookmaker, Goal/No Goal e Over/Under hanno potere predittivo limitato "
-            "(spesso vicini alle frequenze storiche). Considerali indicativi."
+        st.error(
+            "🚫 **Niente scommesse consigliate** su questa partita: mancano le quote bookmaker. "
+            "Le % sotto sono solo indicative (modello + forma/Elo). Non usarle come value bet."
         )
     a1, a2, a3 = st.columns(3)
     a1.metric("1 (Casa)", f"{mk['p1']*100:.1f}%", f"Equa: {1/mk['p1']:.2f}")
@@ -1766,11 +1767,15 @@ def mostra_analisi(casa, trasf, data, ora):
     u5.metric("No Goal", f"{(1-mg['btts'])*100:.1f}%", f"Equa: {1/(1-mg['btts']):.2f}")
 
     st.markdown("#### 🎯 Top 3 Risultati Esatti")
+    st.caption(
+        "Solo informativi: in backtest il 1° esatto esce ~10–16% delle volte. "
+        "**Non** usarli come strategia principale di bankroll."
+    )
     flat = sorted(((i, j, M[i, j]) for i in range(M.shape[0]) for j in range(M.shape[1])), key=lambda t: t[2], reverse=True)[:3]
     for col, medaglia, nome, (i, j, p) in zip(st.columns(3), ["🥇", "🥈", "🥉"], ["1°", "2°", "3°"], flat):
         col.info(f"{medaglia} {nome}: **{i} - {j}** ({p*100:.1f}%)")
     if d["ancorata"]:
-        st.caption("Con quote reali le probabilità 1X2 coincidono col mercato (senza margine): non c'è edge sul 1X2.")
+        st.caption("Con quote reali le probabilità 1X2 coincidono col mercato (senza margine): non c'è edge automatico sul 1X2.")
     if casa not in modello["idx"] or trasf not in modello["idx"]:
         st.caption("⚠ Una squadra senza storico (es. neopromossa) è trattata come media di lega.")
 
@@ -1869,44 +1874,76 @@ with tab_classifica:
 # --- VALUE FINDER ---
 with tab_value_finder:
     st.subheader("⚡ Scanner Value Finder")
+    st.warning(
+        "Nei backtest multi-lega il **CLV medio sull'edge del modello è negativo** (~−5/−7%). "
+        "Un Edge alto qui **non** è un tip automatico: confronta sempre col tuo book e col tab Backtest."
+    )
     if fx is None:
         st.warning(f"Impossibile scaricare fixtures/quote: {fx_err}.")
     elif df_value.empty:
         st.info(
             "Nessuna partita futura con quote. Il file fixtures.csv viene aggiornato "
-            "pochi giorni prima di ogni turno."
+            "pochi giorni prima di ogni turno. **Senza quote non ci sono value bet.**"
         )
     else:
         st.caption(
             f"Fonte quote: {fonte_quote}. "
-            "Edge = prob. modello × quota − 1. Qui si usa il modello puro: "
-            "con probabilità ancorate alle quote l'edge sarebbe sempre negativo (margine book). "
-            "Un edge alto è spesso errore del modello — controlla CLV e calibrazione nel tab Backtest."
+            "Edge = prob. modello × quota − 1 (modello puro vs quota book). "
+            "Con probabilità ancorate l'edge 1X2 sarebbe ~0 (margine book)."
         )
-        min_edge = st.slider("Edge minimo (%)", 0.0, 25.0, 3.0)
-        st.dataframe(df_value[df_value["Edge"] >= min_edge], use_container_width=True, hide_index=True)
-        if (df_value["Nota"] != "").any():
-            st.caption("⚠ Squadre senza storico trattate come media: probabilmente sopravvalutate.")
+        c_a, c_b = st.columns(2)
+        min_edge = c_a.slider("Edge minimo (%)", 0.0, 25.0, 8.0, help="Default 8%: sotto è quasi sempre rumore")
+        solo_storico = c_b.checkbox("Solo squadre con storico completo", value=True)
+        vf = df_value.copy()
+        if solo_storico:
+            vf = vf[vf["Nota"].fillna("") == ""]
+        vf = vf[vf["Edge"] >= min_edge]
+        if vf.empty:
+            st.info("Nessuna riga con questi filtri. Alza/abbassa l'edge o togli il filtro storico.")
+        else:
+            st.dataframe(vf, use_container_width=True, hide_index=True)
+            st.caption(
+                f"{len(vf)} righe · Ordinate per Edge. "
+                "Prima di puntare: quota del **tuo** book ≥ Quota_Book e probabilità coerente col Backtest."
+            )
+        if (df_value["Nota"].fillna("") != "").any():
+            st.caption("⚠ Righe con nota = squadre senza storico (spesso sopravvalutate).")
 
 
 # --- SCHEDINE AI ---
 with tab_ai_schedine:
     st.subheader("🤖 Schedine Smart & Combo")
-    base = df_value[df_value["Nota"] == ""] if not df_value.empty else df_value
+    st.error(
+        "⛔ **Le multiple non sono consigliate.** "
+        "L'EV combinato è ottimistico: moltiplica errori del modello e il margine del book. "
+        "In backtest l'edge singolo ha già CLV negativo — in multipla peggiora."
+    )
+    base = df_value[df_value["Nota"].fillna("") == ""] if not df_value.empty else df_value
     if base.empty or len(base) < 2:
         st.info("Servono almeno 2 partite del prossimo turno con quote e squadre con storico.")
     else:
         n_disp = len(base)
-        num_ev = st.slider("Eventi in multipla", 2, min(6, n_disp), min(3, n_disp)) if n_disp > 2 else 2
-        subset = base.head(num_ev)
+        # max 3 eventi (prima 6)
+        num_ev = st.slider("Eventi in multipla (max 3)", 2, min(3, n_disp), 2) if n_disp > 2 else 2
+        # solo edge più alti
+        base2 = base[base["Edge"] >= 5].head(num_ev) if "Edge" in base.columns else base.head(num_ev)
+        if len(base2) < 2:
+            base2 = base.head(num_ev)
+        subset = base2
         quota_tot = float(np.prod(subset["Quota_Book"].values))
         prob_comb = float(np.prod(subset["Prob_Modello"].values / 100))
-        s1, s2, s3 = st.columns(3)
+        # haircut empirico: ~15% di probabilità per correlazione/overconfidence
+        prob_adj = prob_comb * (0.85 ** max(0, len(subset) - 1))
+        s1, s2, s3, s4 = st.columns(4)
         s1.metric("📈 Quota accumulatore", f"{quota_tot:.2f}")
-        s2.metric("Prob. combinata (modello)", f"{prob_comb*100:.1f}%")
-        s3.metric("EV", f"{(prob_comb*quota_tot-1)*100:+.1f}%")
+        s2.metric("Prob. grezza modello", f"{prob_comb*100:.1f}%")
+        s3.metric("Prob. aggiustata", f"{prob_adj*100:.1f}%", help="Haircut per multipla")
+        s4.metric("EV aggiustato", f"{(prob_adj*quota_tot-1)*100:+.1f}%")
         st.dataframe(subset, use_container_width=True, hide_index=True)
-        st.caption("La multipla moltiplica errori del modello e margine book: l'EV mostrato è ottimistico.")
+        st.caption(
+            "Preferisci **singole** selezionate dal Value Finder filtrato + confronto col tuo book. "
+            "Questa tab resta solo per sperimentare, non come metodo principale."
+        )
 
 
 # --- MONTE CARLO ---
