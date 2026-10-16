@@ -1,6 +1,6 @@
 
 """
-Combo Master Grook — v4.9.1
+Combo Master Grook — v4.10
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
 """
 
@@ -67,7 +67,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.9.1</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.10</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -1022,6 +1022,69 @@ def mercati(M):
     return d
 
 
+def sintesi_pronostico(M):
+    """
+    Pronostico 1X2, doppia chance, combo (congiunte sulla matrice) e multigol.
+    La X pura perde quasi sempre l'argmax (pareggio ~25% vs favorito ~45%).
+    Se i due lati sono vicini e il pareggio è competitivo, il segno diventa X.
+    """
+    ii, jj = np.indices(M.shape)
+    totg = ii + jj
+    p1 = float(M[ii > jj].sum())
+    px = float(M[ii == jj].sum())
+    p2 = float(M[ii < jj].sum())
+    btts = (ii > 0) & (jj > 0)
+    home, away, draw = ii > jj, ii < jj, ii == jj
+
+    secco = max((("1", p1), ("X", px), ("2", p2)), key=lambda t: t[1])[0]
+    equilibrata = abs(p1 - p2) <= 0.10 and px >= 0.22 and px >= max(p1, p2) - 0.10
+    segno = "X" if equilibrata else secco
+
+    dc = {"1X": p1 + px, "X2": px + p2, "12": p1 + p2}
+    dc_nome = max(dc, key=dc.get)
+
+    combo_core = {
+        "1 + Gol": home & btts,
+        "1 + No Gol": home & ~btts,
+        "X + Gol": draw & btts,
+        "X + No Gol": draw & ~btts,
+        "2 + Gol": away & btts,
+        "2 + No Gol": away & ~btts,
+    }
+    combo_extra = {
+        "1 + Over 2.5": home & (totg >= 3),
+        "2 + Over 2.5": away & (totg >= 3),
+        "X + Under 2.5": draw & (totg <= 2),
+        "1 + Over 1.5": home & (totg >= 2),
+        "2 + Over 1.5": away & (totg >= 2),
+    }
+    core = sorted(
+        ((nome, float(M[mask].sum())) for nome, mask in combo_core.items()),
+        key=lambda t: t[1], reverse=True,
+    )
+    extra = sorted(
+        ((nome, float(M[mask].sum())) for nome, mask in combo_extra.items()),
+        key=lambda t: t[1], reverse=True,
+    )
+
+    bande = (("1-2", 1, 2), ("2-3", 2, 3), ("0-2", 0, 2), ("1-3", 1, 3), ("2-4", 2, 4), ("3-5", 3, 5))
+    mg = sorted(
+        ((nome, float(M[(totg >= a) & (totg <= b)].sum())) for nome, a, b in bande),
+        key=lambda t: t[1],
+        reverse=True,
+    )
+    return {
+        "p1": p1, "px": px, "p2": p2,
+        "segno": segno,
+        "segno_max": secco,
+        "equilibrata": equilibrata,
+        "dc": dc_nome, "dc_p": dc[dc_nome], "dc_all": dc,
+        "combo": core[0][0], "combo_p": core[0][1], "combo_top": core[:3],
+        "combo_extra": extra[0],
+        "mg": mg[0][0], "mg_p": mg[0][1], "mg_top": mg[:3],
+    }
+
+
 def matrice_frequenze(df):
     cm = np.zeros((11, 11))
     np.add.at(cm, (np.minimum(df["FTHG"].to_numpy(), 10), np.minimum(df["FTAG"].to_numpy(), 10)), 1)
@@ -1960,6 +2023,33 @@ def mostra_analisi(casa, trasf, data, ora):
     a1.metric("1 (Casa)", f"{mk['p1']*100:.1f}%", f"Equa: {1/mk['p1']:.2f}")
     a2.metric("X (Pareggio)", f"{mk['px']*100:.1f}%", f"Equa: {1/mk['px']:.2f}")
     a3.metric("2 (Trasferta)", f"{mk['p2']*100:.1f}%", f"Equa: {1/mk['p2']:.2f}")
+
+    syn = sintesi_pronostico(d["M_1x2"])
+    st.markdown("#### Pronostico")
+    if syn["equilibrata"]:
+        st.caption(
+            "Partita equilibrata: i due esiti sono vicini e il pareggio è competitivo, "
+            "quindi il segno è **X**. Il massimo secco da solo non sceglie quasi mai il pareggio "
+            "(di solito resta intorno al 25%)."
+        )
+    else:
+        st.caption(
+            f"Segno secco sul massimo di probabilità (**{syn['segno_max']}**). "
+            "La X esce come pronostico solo se la partita è equilibrata "
+            f"(ora X = {syn['px']*100:.0f}%, non abbastanza vicina al favorito)."
+        )
+    p1c, p2c, p3c, p4c = st.columns(4)
+    p1c.metric("Segno 1X2", syn["segno"], f"{({'1': syn['p1'], 'X': syn['px'], '2': syn['p2']})[syn['segno']]*100:.0f}%")
+    p2c.metric("Doppia chance", syn["dc"], f"{syn['dc_p']*100:.0f}%")
+    p3c.metric("Combo", syn["combo"], f"{syn['combo_p']*100:.0f}%")
+    p4c.metric("Multigol", syn["mg"], f"{syn['mg_p']*100:.0f}%")
+    dc1, dc2, dc3 = st.columns(3)
+    for col, nome in zip((dc1, dc2, dc3), ("1X", "X2", "12")):
+        col.caption(f"{nome} {syn['dc_all'][nome]*100:.0f}%" + (" · scelta" if nome == syn["dc"] else ""))
+    ctop = " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["combo_top"])
+    mtop = " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["mg_top"])
+    st.caption(f"Combo (congiunte, non indipendenti): {ctop}")
+    st.caption(f"Multigol: {mtop}")
     if d.get("elo_c") is not None or d.get("elo_t") is not None:
         e1, e2, e3 = st.columns(3)
         e1.metric("ClubElo Casa", f"{d['elo_c']:.0f}" if d.get("elo_c") else "—")
@@ -2058,14 +2148,11 @@ with tab_calendario:
                 lh, la, _, _, _, _ = lambda_full(
                     modello, casa, trasf, elo_map, form_map, ELO_BLEND_LIVE, FORM_BLEND_LIVE
                 )
-                mk = mercati(matrice_punteggi(lh, la, modello["rho"]))
-                p1, px, p2 = mk["p1"] * 100, mk["px"] * 100, mk["p2"] * 100
-                o25 = mk["over2.5"] * 100
-                btts = mk["btts"] * 100
+                syn = sintesi_pronostico(matrice_punteggi(lh, la, modello["rho"]))
             except Exception:
-                p1 = px = p2 = o25 = btts = float("nan")
+                syn = None
 
-            c_left, c_mid, c_btn = st.columns([2.2, 3.2, 0.9])
+            c_left, c_mid, c_btn = st.columns([2.2, 3.6, 0.8])
             with c_left:
                 if finita:
                     st.markdown(f"**{casa}** {int(gc)}-{int(gt)} **{trasf}**")
@@ -2074,10 +2161,13 @@ with tab_calendario:
                     st.markdown(f"**{casa}** vs **{trasf}**")
                     st.caption(f"{row['Data']} · {row['Ora']}")
             with c_mid:
-                if not (p1 != p1):  # not nan
+                if syn:
                     st.caption(
-                        f"1 **{p1:.0f}%** · X **{px:.0f}%** · 2 **{p2:.0f}%**"
-                        f"  ·  O2.5 **{o25:.0f}%** · BTTS **{btts:.0f}%**"
+                        f"Pron. **{syn['segno']}** · DC **{syn['dc']}** {syn['dc_p']*100:.0f}% · "
+                        f"Combo **{syn['combo']}** {syn['combo_p']*100:.0f}% · MG **{syn['mg']}** {syn['mg_p']*100:.0f}%"
+                    )
+                    st.caption(
+                        f"1 {syn['p1']*100:.0f}% · X {syn['px']*100:.0f}% · 2 {syn['p2']*100:.0f}%"
                     )
                 else:
                     st.caption("Probabilità non calcolabili")
