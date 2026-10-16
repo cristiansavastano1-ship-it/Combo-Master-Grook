@@ -1,6 +1,5 @@
-
 """
-Combo Master Grook — v4.10
+Combo Master Grook — v4.11
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
 """
 
@@ -67,7 +66,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.10</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.11</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -1062,6 +1061,9 @@ def sintesi_pronostico(M):
         ((nome, float(M[mask].sum())) for nome, mask in combo_core.items()),
         key=lambda t: t[1], reverse=True,
     )
+    # Combo principale: solo quelle del segno scelto (se è X, non 1+No Gol / 2+No Gol)
+    del_segno = [c for c in core if c[0].startswith(segno + " ")]
+    scelta = del_segno[0] if del_segno else core[0]
     extra = sorted(
         ((nome, float(M[mask].sum())) for nome, mask in combo_extra.items()),
         key=lambda t: t[1], reverse=True,
@@ -1079,7 +1081,7 @@ def sintesi_pronostico(M):
         "segno_max": secco,
         "equilibrata": equilibrata,
         "dc": dc_nome, "dc_p": dc[dc_nome], "dc_all": dc,
-        "combo": core[0][0], "combo_p": core[0][1], "combo_top": core[:3],
+        "combo": scelta[0], "combo_p": scelta[1], "combo_top": (del_segno or core)[:3],
         "combo_extra": extra[0],
         "mg": mg[0][0], "mg_p": mg[0][1], "mg_top": mg[:3],
     }
