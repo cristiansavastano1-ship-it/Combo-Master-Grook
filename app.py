@@ -1,3 +1,4 @@
+
 """
 Combo Master Grook — v4.11
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
@@ -1068,6 +1069,21 @@ def sintesi_pronostico(M):
         ((nome, float(M[mask].sum())) for nome, mask in combo_extra.items()),
         key=lambda t: t[1], reverse=True,
     )
+    # Over/Under 2.5 solo del segno scelto (1 + Over, 2 + Under, X + Under, …)
+    lato = {"1": home, "X": draw, "2": away}[segno]
+    ou_coppie = [
+        (f"{segno} + Over 2.5", lato & (totg >= 3)),
+        (f"{segno} + Under 2.5", lato & (totg <= 2)),
+        (f"{segno} + Over 1.5", lato & (totg >= 2)),
+        (f"{segno} + Under 1.5", lato & (totg <= 1)),
+    ]
+    ou_all = sorted(
+        ((nome, float(M[mask].sum())) for nome, mask in ou_coppie),
+        key=lambda t: t[1], reverse=True,
+    )
+    # La combo O/U in evidenza è Over/Under 2.5 (1.5 è quasi sempre Over)
+    ou_25 = [c for c in ou_all if "2.5" in c[0]]
+    ou_scelta = max(ou_25, key=lambda t: t[1])
 
     bande = (("1-2", 1, 2), ("2-3", 2, 3), ("0-2", 0, 2), ("1-3", 1, 3), ("2-4", 2, 4), ("3-5", 3, 5))
     mg = sorted(
@@ -1083,6 +1099,7 @@ def sintesi_pronostico(M):
         "dc": dc_nome, "dc_p": dc[dc_nome], "dc_all": dc,
         "combo": scelta[0], "combo_p": scelta[1], "combo_top": (del_segno or core)[:3],
         "combo_extra": extra[0],
+        "ou": ou_scelta[0], "ou_p": ou_scelta[1], "ou_top": ou_all,
         "mg": mg[0][0], "mg_p": mg[0][1], "mg_top": mg[:3],
     }
 
@@ -2040,17 +2057,20 @@ def mostra_analisi(casa, trasf, data, ora):
             "La X esce come pronostico solo se la partita è equilibrata "
             f"(ora X = {syn['px']*100:.0f}%, non abbastanza vicina al favorito)."
         )
-    p1c, p2c, p3c, p4c = st.columns(4)
+    p1c, p2c, p3c, p4c, p5c = st.columns(5)
     p1c.metric("Segno 1X2", syn["segno"], f"{({'1': syn['p1'], 'X': syn['px'], '2': syn['p2']})[syn['segno']]*100:.0f}%")
     p2c.metric("Doppia chance", syn["dc"], f"{syn['dc_p']*100:.0f}%")
-    p3c.metric("Combo", syn["combo"], f"{syn['combo_p']*100:.0f}%")
-    p4c.metric("Multigol", syn["mg"], f"{syn['mg_p']*100:.0f}%")
+    p3c.metric("Combo gol", syn["combo"], f"{syn['combo_p']*100:.0f}%")
+    p4c.metric("Combo O/U", syn["ou"], f"{syn['ou_p']*100:.0f}%")
+    p5c.metric("Multigol", syn["mg"], f"{syn['mg_p']*100:.0f}%")
     dc1, dc2, dc3 = st.columns(3)
     for col, nome in zip((dc1, dc2, dc3), ("1X", "X2", "12")):
         col.caption(f"{nome} {syn['dc_all'][nome]*100:.0f}%" + (" · scelta" if nome == syn["dc"] else ""))
     ctop = " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["combo_top"])
+    otop = " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["ou_top"])
     mtop = " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["mg_top"])
-    st.caption(f"Combo (congiunte, non indipendenti): {ctop}")
+    st.caption(f"Combo gol (solo il segno {syn['segno']}): {ctop}")
+    st.caption(f"Combo Over/Under (solo il segno {syn['segno']}): {otop}")
     st.caption(f"Multigol: {mtop}")
     if d.get("elo_c") is not None or d.get("elo_t") is not None:
         e1, e2, e3 = st.columns(3)
@@ -2166,7 +2186,7 @@ with tab_calendario:
                 if syn:
                     st.caption(
                         f"Pron. **{syn['segno']}** · DC **{syn['dc']}** {syn['dc_p']*100:.0f}% · "
-                        f"Combo **{syn['combo']}** {syn['combo_p']*100:.0f}% · MG **{syn['mg']}** {syn['mg_p']*100:.0f}%"
+                        f"{syn['combo']} {syn['combo_p']*100:.0f}% · {syn['ou']} {syn['ou_p']*100:.0f}% · MG **{syn['mg']}**"
                     )
                     st.caption(
                         f"1 {syn['p1']*100:.0f}% · X {syn['px']*100:.0f}% · 2 {syn['p2']*100:.0f}%"
