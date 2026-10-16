@@ -1091,6 +1091,45 @@ def sintesi_pronostico(M):
         key=lambda t: t[1],
         reverse=True,
     )
+    bande_sq = (("0-1", 0, 1), ("1-2", 1, 2), ("0-2", 0, 2), ("1-3", 1, 3), ("2-3", 2, 3))
+    marg_h = M.sum(axis=1)
+    marg_a = M.sum(axis=0)
+
+    def _fasce(marg, bande_):
+        out = []
+        for nome, a, b in bande_:
+            if a >= len(marg):
+                out.append((nome, 0.0))
+            else:
+                out.append((nome, float(marg[a:min(b + 1, len(marg))].sum())))
+        out.sort(key=lambda t: t[1], reverse=True)
+        return out
+
+    def _stretta(lista):
+        """In evidenza 0-1 / 1-2 / 2-3: 0-2 e 1-3 coprono troppo e vincono sempre."""
+        strette = [c for c in lista if c[0] in ("0-1", "1-2", "2-3")]
+        return max(strette, key=lambda t: t[1]) if strette else lista[0]
+
+    mg_casa = _fasce(marg_h, bande_sq)
+    mg_osp = _fasce(marg_a, bande_sq)
+    # 1°/2° tempo: split dei gol attesi (niente storico tempi). 1T ~45%, 2T ~55%.
+    lh_hat = float((marg_h * np.arange(len(marg_h))).sum())
+    la_hat = float((marg_a * np.arange(len(marg_a))).sum())
+    bande_ht = (("0-1", 0, 1), ("1-2", 1, 2), ("0-2", 0, 2), ("1-3", 1, 3))
+
+    def _mg_tempo(share):
+        Mt = matrice_punteggi(max(lh_hat * share, 0.05), max(la_hat * share, 0.05), 0.0)
+        ti, tj = np.indices(Mt.shape)
+        tt = ti + tj
+        p = np.zeros(int(tt.max()) + 1)
+        for k in range(len(p)):
+            p[k] = float(Mt[tt == k].sum())
+        return _fasce(p, bande_ht)
+
+    mg_1t = _mg_tempo(0.45)
+    mg_2t = _mg_tempo(0.55)
+    casa_s, osp_s = _stretta(mg_casa), _stretta(mg_osp)
+    t1_s, t2_s = _stretta(mg_1t), _stretta(mg_2t)
     return {
         "p1": p1, "px": px, "p2": p2,
         "segno": segno,
@@ -1101,6 +1140,10 @@ def sintesi_pronostico(M):
         "combo_extra": extra[0],
         "ou": ou_scelta[0], "ou_p": ou_scelta[1], "ou_top": ou_all,
         "mg": mg[0][0], "mg_p": mg[0][1], "mg_top": mg[:3],
+        "mg_casa": casa_s[0], "mg_casa_p": casa_s[1], "mg_casa_top": mg_casa[:3],
+        "mg_osp": osp_s[0], "mg_osp_p": osp_s[1], "mg_osp_top": mg_osp[:3],
+        "mg_1t": t1_s[0], "mg_1t_p": t1_s[1], "mg_1t_top": mg_1t[:3],
+        "mg_2t": t2_s[0], "mg_2t_p": t2_s[1], "mg_2t_top": mg_2t[:3],
     }
 
 
@@ -2071,7 +2114,22 @@ def mostra_analisi(casa, trasf, data, ora):
     mtop = " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["mg_top"])
     st.caption(f"Combo gol (solo il segno {syn['segno']}): {ctop}")
     st.caption(f"Combo Over/Under (solo il segno {syn['segno']}): {otop}")
-    st.caption(f"Multigol: {mtop}")
+    st.caption(f"Multigol partita: {mtop}")
+    h1, h2, h3, h4 = st.columns(4)
+    h1.metric("Multigol Casa", syn["mg_casa"], f"{syn['mg_casa_p']*100:.0f}%")
+    h2.metric("Multigol Ospite", syn["mg_osp"], f"{syn['mg_osp_p']*100:.0f}%")
+    h3.metric("Multigol 1° tempo", syn["mg_1t"], f"{syn['mg_1t_p']*100:.0f}%")
+    h4.metric("Multigol 2° tempo", syn["mg_2t"], f"{syn['mg_2t_p']*100:.0f}%")
+    st.caption(
+        "Casa: " + " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["mg_casa_top"])
+        + "  ·  Ospite: " + " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["mg_osp_top"])
+    )
+    st.caption(
+        "1° tempo (stima 45% dei gol attesi, non c'è lo storico dei tempi): "
+        + " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["mg_1t_top"])
+        + "  ·  2° tempo (55%): "
+        + " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["mg_2t_top"])
+    )
     if d.get("elo_c") is not None or d.get("elo_t") is not None:
         e1, e2, e3 = st.columns(3)
         e1.metric("ClubElo Casa", f"{d['elo_c']:.0f}" if d.get("elo_c") else "—")
@@ -2190,6 +2248,8 @@ with tab_calendario:
                     )
                     st.caption(
                         f"1 {syn['p1']*100:.0f}% · X {syn['px']*100:.0f}% · 2 {syn['p2']*100:.0f}%"
+                        f"  ·  MG casa {syn['mg_casa']} · osp {syn['mg_osp']}"
+                        f"  ·  1T {syn['mg_1t']} · 2T {syn['mg_2t']}"
                     )
                 else:
                     st.caption("Probabilità non calcolabili")
