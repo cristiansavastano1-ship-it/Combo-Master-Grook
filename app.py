@@ -1,4 +1,3 @@
-
 """
 Combo Master Grook — v4.11
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
@@ -119,6 +118,7 @@ ELO_BLEND = 0.35
 ELO_SCALE = 400.0
 FORM_N = 6              # ultime N partite per la forma
 FORM_BLEND = 0.25       # peso forma recente sui λ (0=off)
+XG_BLEND = 0.20         # peso Understat xG, fisso (niente slider)
 UNDERSTAT_PATHS = ("data/understat_xg.csv", "understat_xg.csv")
 UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.9)"}
 N_STAGIONI = 3
@@ -1069,21 +1069,23 @@ def sintesi_pronostico(M):
         ((nome, float(M[mask].sum())) for nome, mask in combo_extra.items()),
         key=lambda t: t[1], reverse=True,
     )
-    # Over/Under 2.5 solo del segno scelto (1 + Over, 2 + Under, X + Under, …)
-    lato = {"1": home, "X": draw, "2": away}[segno]
-    ou_coppie = [
-        (f"{segno} + Over 2.5", lato & (totg >= 3)),
-        (f"{segno} + Under 2.5", lato & (totg <= 2)),
-        (f"{segno} + Over 1.5", lato & (totg >= 2)),
-        (f"{segno} + Under 1.5", lato & (totg <= 1)),
-    ]
-    ou_all = sorted(
-        ((nome, float(M[mask].sum())) for nome, mask in ou_coppie),
-        key=lambda t: t[1], reverse=True,
-    )
-    # La combo O/U in evidenza è Over/Under 2.5 (1.5 è quasi sempre Over)
-    ou_25 = [c for c in ou_all if "2.5" in c[0]]
-    ou_scelta = max(ou_25, key=lambda t: t[1])
+    # Over/Under solo del segno (1 + Over, 2 + Under, X + Under, …)
+    ou_by = {}
+    for segno_k, lato_k in (("1", home), ("X", draw), ("2", away)):
+        coppie = [
+            (f"{segno_k} + Over 2.5", lato_k & (totg >= 3)),
+            (f"{segno_k} + Under 2.5", lato_k & (totg <= 2)),
+            (f"{segno_k} + Over 1.5", lato_k & (totg >= 2)),
+            (f"{segno_k} + Under 1.5", lato_k & (totg <= 1)),
+        ]
+        tutte = sorted(
+            ((nome, float(M[mask].sum())) for nome, mask in coppie),
+            key=lambda t: t[1], reverse=True,
+        )
+        ou_25 = [c for c in tutte if "2.5" in c[0]]
+        ou_by[segno_k] = {"scelta": max(ou_25, key=lambda t: t[1]), "tutte": tutte}
+    ou_scelta = ou_by[segno]["scelta"]
+    ou_all = ou_by[segno]["tutte"]
 
     bande = (("1-2", 1, 2), ("2-3", 2, 3), ("0-2", 0, 2), ("1-3", 1, 3), ("2-4", 2, 4), ("3-5", 3, 5))
     mg = sorted(
@@ -1137,8 +1139,9 @@ def sintesi_pronostico(M):
         "equilibrata": equilibrata,
         "dc": dc_nome, "dc_p": dc[dc_nome], "dc_all": dc,
         "combo": scelta[0], "combo_p": scelta[1], "combo_top": (del_segno or core)[:3],
+        "combo_all": core,
         "combo_extra": extra[0],
-        "ou": ou_scelta[0], "ou_p": ou_scelta[1], "ou_top": ou_all,
+        "ou": ou_scelta[0], "ou_p": ou_scelta[1], "ou_top": ou_all, "ou_by": ou_by,
         "mg": mg[0][0], "mg_p": mg[0][1], "mg_top": mg[:3],
         "mg_casa": casa_s[0], "mg_casa_p": casa_s[1], "mg_casa_top": mg_casa[:3],
         "mg_osp": osp_s[0], "mg_osp_p": osp_s[1], "mg_osp_top": mg_osp[:3],
@@ -1194,6 +1197,112 @@ def platt_apply(p_raw, a, b):
     return expit(a + b * z)
 
 
+def _param_platt(p, y):
+    """Platt stabile: se il fit è storto, lascia la probabilità invariata."""
+    a, b = platt_fit(p, y)
+    if not np.isfinite(a) or not np.isfinite(b) or b < 0.25:
+        return 0.0, 1.0
+    return float(a), float(b)
+
+
+def _fasce_hit(p_cal, y, width=0.10):
+    p_cal = np.asarray(p_cal, float)
+    y = np.asarray(y, float)
+    out = []
+    lo = 0.15
+    while lo < 0.90:
+        hi = lo + width
+        sel = (p_cal >= lo) & (p_cal < hi)
+        n = int(sel.sum())
+        if n >= 25:
+            out.append({"lo": round(lo, 2), "hi": round(hi, 2), "hit": float(y[sel].mean()), "n": n})
+        lo += width
+    return out
+
+
+def fit_calibrazione(bt):
+    """Calibrazione 1X2, Over 2.5 e Goal sul walk-forward, più il tasso storico per fascia."""
+    if bt is None or len(bt) < 80 or "over25" not in bt.columns:
+        return None
+    y = bt["y"].to_numpy(int)
+    out = {"n": int(len(bt)), "fasce": {}}
+    for col, yy in (("p1", y == 0), ("px", y == 1), ("p2", y == 2)):
+        raw = bt[col].to_numpy(float)
+        a, b = _param_platt(raw, yy.astype(float))
+        out[col] = (a, b)
+        out["fasce"][col] = _fasce_hit(np.asarray(platt_apply(raw, a, b), float), yy.astype(float))
+    for col, ycol in (("over25", "y_o25"), ("btts", "y_btts")):
+        raw = bt[col].to_numpy(float)
+        yy = bt[ycol].to_numpy(float)
+        a, b = _param_platt(raw, yy)
+        out[col] = (a, b)
+        out["fasce"][col] = _fasce_hit(np.asarray(platt_apply(raw, a, b), float), yy)
+    return out
+
+
+def storico_fascia(cal, chiave, p):
+    if not cal:
+        return None
+    for f in cal.get("fasce", {}).get(chiave, []):
+        if f["lo"] <= p < f["hi"] or (p >= 0.85 and f["hi"] >= 0.85 and p >= f["lo"]):
+            return f
+    return None
+
+
+def _testo_storico(cal, chiave, p, ancorata=False):
+    if ancorata and chiave in ("p1", "px", "p2", "over25"):
+        return "allineato alle quote (fonte più affidabile del modello puro)"
+    f = storico_fascia(cal, chiave, p)
+    if not f:
+        return "storico in questa fascia ancora corto"
+    return f"quando il modello diceva {f['lo']*100:.0f}–{f['hi']*100:.0f}%, è uscito il {f['hit']*100:.0f}% (n={f['n']})"
+
+
+def _segna_da_p(p1, px, p2):
+    secco = max((("1", p1), ("X", px), ("2", p2)), key=lambda t: t[1])[0]
+    equilibrata = abs(p1 - p2) <= 0.10 and px >= 0.22 and px >= max(p1, p2) - 0.10
+    segno = "X" if equilibrata else secco
+    dc = {"1X": p1 + px, "X2": px + p2, "12": p1 + p2}
+    dc_nome = max(dc, key=dc.get)
+    return segno, secco, equilibrata, dc_nome, dc[dc_nome], dc
+
+
+def applica_affidabilita(syn, cal, ancorata=False):
+    """
+    Senza quote, 1X2 e doppia chance usano le probabilità calibrate.
+    Combo e multigol restano sulla matrice: sono indicativi.
+    Con le quote il 1X2 non si tocca.
+    """
+    syn = dict(syn)
+    syn["calib"] = False
+    if ancorata or not cal:
+        return syn
+    p1 = float(platt_apply(syn["p1"], *cal["p1"]))
+    px = float(platt_apply(syn["px"], *cal["px"]))
+    p2 = float(platt_apply(syn["p2"], *cal["p2"]))
+    s = p1 + px + p2
+    if s <= 0:
+        return syn
+    p1, px, p2 = p1 / s, px / s, p2 / s
+    segno, secco, eq, dc_nome, dc_p, dc = _segna_da_p(p1, px, p2)
+    syn.update(p1=p1, px=px, p2=p2, segno=segno, segno_max=secco, equilibrata=eq,
+               dc=dc_nome, dc_p=dc_p, dc_all=dc, calib=True)
+    del_segno = [c for c in syn.get("combo_all", []) if c[0].startswith(segno + " ")]
+    if del_segno:
+        syn["combo"], syn["combo_p"] = del_segno[0][0], del_segno[0][1]
+        syn["combo_top"] = del_segno[:3]
+    ou = (syn.get("ou_by") or {}).get(segno)
+    if ou:
+        syn["ou"], syn["ou_p"], syn["ou_top"] = ou["scelta"][0], ou["scelta"][1], ou["tutte"]
+    return syn
+
+
+def prob_calibrata(p, cal, chiave):
+    if not cal or chiave not in cal:
+        return float(p)
+    return float(np.clip(platt_apply(p, *cal[chiave]), 0.01, 0.99))
+
+
 # ======================= BACKTEST 1X2 =======================
 def esegui_backtest_df(df, ridge, halflife, usa_dc, passo):
     stagioni = sorted(df["Stag"].unique())
@@ -1218,6 +1327,9 @@ def esegui_backtest_df(df, ridge, halflife, usa_dc, passo):
                 righe.append({
                     "Date": r["Date"], "Partita": f"{r['HomeTeam']} - {r['AwayTeam']}", "y": esito,
                     "p1": mk["p1"], "px": mk["px"], "p2": mk["p2"],
+                    "over25": mk["over2.5"], "btts": mk["btts"],
+                    "y_o25": int(r["FTHG"] + r["FTAG"] >= 3),
+                    "y_btts": int(r["FTHG"] > 0 and r["FTAG"] > 0),
                     "f1": freq[0], "fx": freq[1], "f2": freq[2],
                     "q1": qp[0] if qp else np.nan, "qx": qp[1] if qp else np.nan, "q2": qp[2] if qp else np.nan,
                     "m1": pm[0], "mx": pm[1], "m2": pm[2],
@@ -1380,6 +1492,16 @@ def modello_corrente(div, ridge, halflife, giorno, chiave: str = ""):
 def backtest_cached(div, ridge, halflife, passo, giorno, chiave: str = ""):
     df = carica_storico(div, N_STAGIONI, giorno, chiave)
     return None if df is None else esegui_backtest_df(df, ridge, halflife, True, passo)
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner="Calibro le percentuali sul passato...")
+def calibrazione_live(div, ridge, halflife, giorno, chiave: str = ""):
+    """Un walk-forward (passo 28 giorni) per riallineare le % a quello che è successo davvero."""
+    df = carica_storico(div, N_STAGIONI, giorno, chiave)
+    if df is None or len(df) < 150:
+        return None
+    bt = esegui_backtest_df(df, ridge, halflife, True, 28)
+    return fit_calibrazione(bt)
 
 
 # ======================= TEST COMPLETO =======================
@@ -1786,19 +1908,9 @@ st.sidebar.caption(
     "Cache 6h → ~1 richiesta per lega ogni 6 ore."
 )
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🎛 Pesi prior (λ gol)")
-st.sidebar.caption("0 = ignora la fonte · 100 = massimo peso sul modello base")
-elo_blend_ui = st.sidebar.slider("ClubElo %", 0, 100, int(ELO_BLEND * 100), 5, key="blend_elo")
-form_blend_ui = st.sidebar.slider(f"Forma U{FORM_N} %", 0, 100, int(FORM_BLEND * 100), 5, key="blend_form")
-xg_blend_ui = st.sidebar.slider("Understat xG %", 0, 100, 20, 5, key="blend_xg")
-ELO_BLEND_LIVE = elo_blend_ui / 100.0
-FORM_BLEND_LIVE = form_blend_ui / 100.0
-XG_BLEND_LIVE = xg_blend_ui / 100.0
-st.sidebar.markdown("---")
 st.sidebar.info(
-    "💡 Parametri auto (shrinkage, emivita). "
-    "Quote: API-Football → fixtures.csv → modello. "
-    "Prior: Elo + forma + xG (pesi qui a sinistra)."
+    "💡 Parametri automatici: shrinkage, emivita, Elo, forma e xG. "
+    "Non c'è niente da regolare a mano."
 )
 st.sidebar.caption(f"Versione test cache: {VERSIONE_TEST}")
 
@@ -1839,6 +1951,7 @@ oggi_ts = pd.Timestamp.now().normalize()
 calendario, fonte_cal = costruisci_calendario(div, df_storico, fx, chiave_api, modello["squadre"])
 
 pesi = pesi_blend_auto(div, par["ridge"], par["halflife"], giorno, chiave_api)
+cal = calibrazione_live(div, par["ridge"], par["halflife"], giorno, chiave_api)
 M_freq_live = matrice_frequenze(df_storico)
 
 # Quote: 1) fixtures.csv  2) API-Football (sovrascrive se presenti)
@@ -1874,20 +1987,20 @@ def _risolvi_quote(casa, trasf):
 
 def distribuzione(casa, trasf):
     lh, la, elo_c, elo_t, fc, ft = lambda_full(
-        modello, casa, trasf, elo_map, form_map, ELO_BLEND_LIVE, FORM_BLEND_LIVE
+        modello, casa, trasf, elo_map, form_map, ELO_BLEND, FORM_BLEND
     )
     fxg_h, fxg_a = fattore_xg(xg_map, casa, trasf)
-    if xg_map and XG_BLEND_LIVE > 0 and (casa in xg_map or trasf in xg_map):
-        lh, la = lh * (fxg_h ** XG_BLEND_LIVE), la * (fxg_a ** XG_BLEND_LIVE)
+    if xg_map and XG_BLEND > 0 and (casa in xg_map or trasf in xg_map):
+        lh, la = lh * (fxg_h ** XG_BLEND), la * (fxg_a ** XG_BLEND)
     Mb = matrice_punteggi(lh, la, modello["rho"])
     p1x2, p_ou, src = _risolvi_quote(casa, trasf)
     bits = []
     if elo_c is not None and elo_t is not None:
-        bits.append(f"ClubElo {elo_c:.0f}–{elo_t:.0f} ({int(ELO_BLEND_LIVE*100)}%)")
+        bits.append(f"ClubElo {elo_c:.0f}–{elo_t:.0f} ({int(ELO_BLEND*100)}%)")
     if fc and ft:
-        bits.append(f"Forma U{FORM_N}: {fc['form_score']:+.2f}/{ft['form_score']:+.2f} ({int(FORM_BLEND_LIVE*100)}%)")
+        bits.append(f"Forma U{FORM_N}: {fc['form_score']:+.2f}/{ft['form_score']:+.2f} ({int(FORM_BLEND*100)}%)")
     if casa in xg_map or trasf in xg_map:
-        bits.append(f"xG ({int(XG_BLEND_LIVE*100)}%)")
+        bits.append(f"xG ({int(XG_BLEND*100)}%)")
     extra_src = (" · " + " · ".join(bits)) if bits else ""
     if p1x2 is not None:
         Ma = matrice_ancorata(p1x2, p_ou, modello["rho"], (lh, la))
@@ -1976,7 +2089,7 @@ if fx is not None:
             if p1x2_api is None:
                 continue
             q = [1.0 / max(p, 1e-6) for p in p1x2_api]
-        lh, la, _, _, _, _ = lambda_full(modello, casa, trasf, elo_map, form_map, ELO_BLEND_LIVE, FORM_BLEND_LIVE)
+        lh, la, _, _, _, _ = lambda_full(modello, casa, trasf, elo_map, form_map, ELO_BLEND, FORM_BLEND)
         mk = mercati(matrice_punteggi(lh, la, modello["rho"]))
         P = np.array([mk["p1"], mk["px"], mk["p2"]])
         pm = senza_margine(q)
@@ -1997,7 +2110,7 @@ for (ah, aa), (p1x2, p_ou, home, away) in (api_odds or {}).items():
     if any(_norm_sq(c) == ah and _norm_sq(t) == aa for c, t in viste):
         continue
     q = [1.0 / max(p, 1e-6) for p in p1x2]
-    lh, la, _, _, _, _ = lambda_full(modello, home, away, elo_map, form_map, ELO_BLEND_LIVE, FORM_BLEND_LIVE)
+    lh, la, _, _, _, _ = lambda_full(modello, home, away, elo_map, form_map, ELO_BLEND, FORM_BLEND)
     mk = mercati(matrice_punteggi(lh, la, modello["rho"]))
     P = np.array([mk["p1"], mk["px"], mk["p2"]])
     pm = p1x2
@@ -2086,20 +2199,34 @@ def mostra_analisi(casa, trasf, data, ora):
     a2.metric("X (Pareggio)", f"{mk['px']*100:.1f}%", f"Equa: {1/mk['px']:.2f}")
     a3.metric("2 (Trasferta)", f"{mk['p2']*100:.1f}%", f"Equa: {1/mk['p2']:.2f}")
 
-    syn = sintesi_pronostico(d["M_1x2"])
+    syn = applica_affidabilita(sintesi_pronostico(d["M_1x2"]), cal, d["ancorata"])
     st.markdown("#### Pronostico")
+    if syn.get("calib"):
+        st.caption(
+            f"1X2 calibrato su {cal['n']} partite passate: la percentuale è più vicina a quante volte è uscito davvero. "
+            + _testo_storico(cal, {"1": "p1", "X": "px", "2": "p2"}[syn["segno"]],
+                            {"1": syn["p1"], "X": syn["px"], "2": syn["p2"]}[syn["segno"]])
+            + "."
+        )
+    elif d["ancorata"]:
+        st.caption(
+            "1X2 preso dalle quote, senza margine del book: è la stima più affidabile che abbiamo."
+        )
+    else:
+        st.caption("Calibrazione non disponibile su questo campionato: percentuali del modello, da prendere con più cautela.")
     if syn["equilibrata"]:
         st.caption(
-            "Partita equilibrata: i due esiti sono vicini e il pareggio è competitivo, "
-            "quindi il segno è **X**. Il massimo secco da solo non sceglie quasi mai il pareggio "
-            "(di solito resta intorno al 25%)."
+            "Partita equilibrata: i due esiti sono vicini e il pareggio è competitivo, quindi il segno è **X**."
         )
     else:
         st.caption(
-            f"Segno secco sul massimo di probabilità (**{syn['segno_max']}**). "
-            "La X esce come pronostico solo se la partita è equilibrata "
-            f"(ora X = {syn['px']*100:.0f}%, non abbastanza vicina al favorito)."
+            f"Segno sul massimo di probabilità (**{syn['segno_max']}**). "
+            f"X = {syn['px']*100:.0f}%."
         )
+    st.caption(
+        "Da usare: segno, doppia chance, Over 2.5 e Goal/No Goal. "
+        "Combo, multigol e risultato esatto sono **indicativi** (fasce larghe o probabilità basse)."
+    )
     p1c, p2c, p3c, p4c, p5c = st.columns(5)
     p1c.metric("Segno 1X2", syn["segno"], f"{({'1': syn['p1'], 'X': syn['px'], '2': syn['p2']})[syn['segno']]*100:.0f}%")
     p2c.metric("Doppia chance", syn["dc"], f"{syn['dc_p']*100:.0f}%")
@@ -2124,23 +2251,19 @@ def mostra_analisi(casa, trasf, data, ora):
             unsafe_allow_html=True,
         )
 
-    _riga_card(
-        "Doppia chance",
-        [(n, syn["dc_all"][n]) for n in ("1X", "X2", "12")],
-        scelta=syn["dc"],
-    )
-    _riga_card(f"Combo gol · segno {syn['segno']}", syn["combo_top"], scelta=syn["combo"])
-    _riga_card(f"Combo Over/Under · segno {syn['segno']}", syn["ou_top"], scelta=syn["ou"])
-    _riga_card("Multigol partita", syn["mg_top"], scelta=syn["mg"])
+    _riga_card("Doppia chance", [(n, syn["dc_all"][n]) for n in ("1X", "X2", "12")], scelta=syn["dc"])
+    _riga_card(f"Indicativo · combo gol · segno {syn['segno']}", syn["combo_top"], scelta=syn["combo"])
+    _riga_card(f"Indicativo · combo Over/Under · segno {syn['segno']}", syn["ou_top"], scelta=syn["ou"])
+    _riga_card("Indicativo · multigol partita (fascia larga)", syn["mg_top"], scelta=syn["mg"])
     h1, h2, h3, h4 = st.columns(4)
     h1.metric("Multigol Casa", syn["mg_casa"], f"{syn['mg_casa_p']*100:.0f}%")
     h2.metric("Multigol Ospite", syn["mg_osp"], f"{syn['mg_osp_p']*100:.0f}%")
-    h3.metric("Multigol 1° tempo", syn["mg_1t"], f"{syn['mg_1t_p']*100:.0f}%")
-    h4.metric("Multigol 2° tempo", syn["mg_2t"], f"{syn['mg_2t_p']*100:.0f}%")
-    _riga_card("Fasce casa", syn["mg_casa_top"], scelta=syn["mg_casa"])
-    _riga_card("Fasce ospite", syn["mg_osp_top"], scelta=syn["mg_osp"])
-    _riga_card("1° tempo (stima 45% dei gol)", syn["mg_1t_top"], scelta=syn["mg_1t"])
-    _riga_card("2° tempo (stima 55% dei gol)", syn["mg_2t_top"], scelta=syn["mg_2t"])
+    h3.metric("1° tempo · indicativo", syn["mg_1t"], f"{syn['mg_1t_p']*100:.0f}%")
+    h4.metric("2° tempo · indicativo", syn["mg_2t"], f"{syn['mg_2t_p']*100:.0f}%")
+    _riga_card("Fasce casa · indicativo", syn["mg_casa_top"], scelta=syn["mg_casa"])
+    _riga_card("Fasce ospite · indicativo", syn["mg_osp_top"], scelta=syn["mg_osp"])
+    _riga_card("1° tempo · stima, non è uno storico", syn["mg_1t_top"], scelta=syn["mg_1t"])
+    _riga_card("2° tempo · stima, non è uno storico", syn["mg_2t_top"], scelta=syn["mg_2t"])
     if d.get("elo_c") is not None or d.get("elo_t") is not None:
         e1, e2, e3 = st.columns(3)
         e1.metric("ClubElo Casa", f"{d['elo_c']:.0f}" if d.get("elo_c") else "—")
@@ -2156,12 +2279,18 @@ def mostra_analisi(casa, trasf, data, ora):
                   f"GF {ft.get('gf', '—')} GS {ft.get('gs', '—')}" if ft else None)
 
     st.markdown("#### ⚽ Under / Over & Goal / No Goal")
+    over25 = mg["over2.5"] if d["ancorata"] else prob_calibrata(mg["over2.5"], cal, "over25")
+    btts = mg["btts"] if d["ancorata"] else prob_calibrata(mg["btts"], cal, "btts")
     u1, u2, u3, u4, u5 = st.columns(5)
-    u1.metric("Over 2.5", f"{mg['over2.5']*100:.1f}%", f"Under: {(1-mg['over2.5'])*100:.1f}%")
-    u2.metric("Over 1.5", f"{mg['over1.5']*100:.1f}%", f"Under: {(1-mg['over1.5'])*100:.1f}%")
-    u3.metric("Over 3.5", f"{mg['over3.5']*100:.1f}%", f"Under: {(1-mg['over3.5'])*100:.1f}%")
-    u4.metric("Goal (BTTS)", f"{mg['btts']*100:.1f}%", f"Equa: {1/mg['btts']:.2f}")
-    u5.metric("No Goal", f"{(1-mg['btts'])*100:.1f}%", f"Equa: {1/(1-mg['btts']):.2f}")
+    u1.metric("Over 2.5", f"{over25*100:.1f}%", f"Under: {(1-over25)*100:.1f}%")
+    u2.metric("Over 1.5", f"{mg['over1.5']*100:.1f}%", "indicativo")
+    u3.metric("Over 3.5", f"{mg['over3.5']*100:.1f}%", "indicativo")
+    u4.metric("Goal (BTTS)", f"{btts*100:.1f}%", f"Equa: {1/max(btts, 1e-6):.2f}")
+    u5.metric("No Goal", f"{(1-btts)*100:.1f}%", f"Equa: {1/max(1-btts, 1e-6):.2f}")
+    st.caption(
+        "Over 2.5: " + _testo_storico(cal, "over25", over25, d["ancorata"])
+        + ". Goal: " + _testo_storico(cal, "btts", btts, False) + "."
+    )
 
     # --- Ritardi squadre (stile "scheda giornata") ---
     st.markdown("#### ⏱️ Ritardi squadre")
@@ -2195,10 +2324,10 @@ def mostra_analisi(casa, trasf, data, ora):
     else:
         st.caption("Ritardi non disponibili per queste squadre.")
 
-    st.markdown("#### 🎯 Top 3 Risultati Esatti")
+    st.markdown("#### 🎯 Top 3 Risultati Esatti · indicativo")
     st.caption(
-        "Solo informativi: in backtest il 1° esatto esce ~10–16% delle volte. "
-        "**Non** usarli come strategia principale di bankroll."
+        "Non è un pronostico affidabile: in backtest il 1° esatto esce circa il 10–16% delle volte. "
+        "Guardalo solo come curiosità, non come selezione."
     )
     flat = sorted(((i, j, M[i, j]) for i in range(M.shape[0]) for j in range(M.shape[1])), key=lambda t: t[2], reverse=True)[:3]
     for col, medaglia, nome, (i, j, p) in zip(st.columns(3), ["🥇", "🥈", "🥉"], ["1°", "2°", "3°"], flat):
@@ -2237,9 +2366,9 @@ with tab_calendario:
             # % rapide modello
             try:
                 lh, la, _, _, _, _ = lambda_full(
-                    modello, casa, trasf, elo_map, form_map, ELO_BLEND_LIVE, FORM_BLEND_LIVE
+                    modello, casa, trasf, elo_map, form_map, ELO_BLEND, FORM_BLEND
                 )
-                syn = sintesi_pronostico(matrice_punteggi(lh, la, modello["rho"]))
+                syn = applica_affidabilita(sintesi_pronostico(matrice_punteggi(lh, la, modello["rho"])), cal, False)
             except Exception:
                 syn = None
 
