@@ -2104,32 +2104,43 @@ def mostra_analisi(casa, trasf, data, ora):
     p1c.metric("Segno 1X2", syn["segno"], f"{({'1': syn['p1'], 'X': syn['px'], '2': syn['p2']})[syn['segno']]*100:.0f}%")
     p2c.metric("Doppia chance", syn["dc"], f"{syn['dc_p']*100:.0f}%")
     p3c.metric("Combo gol", syn["combo"], f"{syn['combo_p']*100:.0f}%")
-    p4c.metric("Combo O/U", syn["ou"], f"{syn['ou_p']*100:.0f}%")
+    p4c.metric("Combo O/U", syn["ou"].split("+ ", 1)[-1], f"{syn['ou_p']*100:.0f}%")
     p5c.metric("Multigol", syn["mg"], f"{syn['mg_p']*100:.0f}%")
-    dc1, dc2, dc3 = st.columns(3)
-    for col, nome in zip((dc1, dc2, dc3), ("1X", "X2", "12")):
-        col.caption(f"{nome} {syn['dc_all'][nome]*100:.0f}%" + (" · scelta" if nome == syn["dc"] else ""))
-    ctop = " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["combo_top"])
-    otop = " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["ou_top"])
-    mtop = " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["mg_top"])
-    st.caption(f"Combo gol (solo il segno {syn['segno']}): {ctop}")
-    st.caption(f"Combo Over/Under (solo il segno {syn['segno']}): {otop}")
-    st.caption(f"Multigol partita: {mtop}")
+    def _riga_card(titolo, voci, scelta=None):
+        celle = []
+        for nome, p in voci:
+            attiva = scelta is not None and nome == scelta
+            bordo = "#38bdf8" if attiva else "#1f2937"
+            celle.append(
+                f'<div style="flex:1; min-width:108px; background:#111827; border:1px solid {bordo};'
+                f' border-radius:12px; padding:10px 12px;">'
+                f'<div style="color:#94a3b8; font-size:0.75rem; line-height:1.2;">{nome}</div>'
+                f'<div style="color:#38bdf8; font-weight:800; font-size:1.15rem; margin-top:4px;">{p*100:.0f}%</div>'
+                f'</div>'
+            )
+        st.markdown(
+            f'<p style="color:#cbd5e1; font-weight:700; font-size:0.92rem; margin:16px 0 8px 0;">{titolo}</p>'
+            f'<div style="display:flex; gap:8px; flex-wrap:wrap;">{"".join(celle)}</div>',
+            unsafe_allow_html=True,
+        )
+
+    _riga_card(
+        "Doppia chance",
+        [(n, syn["dc_all"][n]) for n in ("1X", "X2", "12")],
+        scelta=syn["dc"],
+    )
+    _riga_card(f"Combo gol · segno {syn['segno']}", syn["combo_top"], scelta=syn["combo"])
+    _riga_card(f"Combo Over/Under · segno {syn['segno']}", syn["ou_top"], scelta=syn["ou"])
+    _riga_card("Multigol partita", syn["mg_top"], scelta=syn["mg"])
     h1, h2, h3, h4 = st.columns(4)
     h1.metric("Multigol Casa", syn["mg_casa"], f"{syn['mg_casa_p']*100:.0f}%")
     h2.metric("Multigol Ospite", syn["mg_osp"], f"{syn['mg_osp_p']*100:.0f}%")
     h3.metric("Multigol 1° tempo", syn["mg_1t"], f"{syn['mg_1t_p']*100:.0f}%")
     h4.metric("Multigol 2° tempo", syn["mg_2t"], f"{syn['mg_2t_p']*100:.0f}%")
-    st.caption(
-        "Casa: " + " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["mg_casa_top"])
-        + "  ·  Ospite: " + " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["mg_osp_top"])
-    )
-    st.caption(
-        "1° tempo (stima 45% dei gol attesi, non c'è lo storico dei tempi): "
-        + " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["mg_1t_top"])
-        + "  ·  2° tempo (55%): "
-        + " · ".join(f"{n} {p*100:.0f}%" for n, p in syn["mg_2t_top"])
-    )
+    _riga_card("Fasce casa", syn["mg_casa_top"], scelta=syn["mg_casa"])
+    _riga_card("Fasce ospite", syn["mg_osp_top"], scelta=syn["mg_osp"])
+    _riga_card("1° tempo (stima 45% dei gol)", syn["mg_1t_top"], scelta=syn["mg_1t"])
+    _riga_card("2° tempo (stima 55% dei gol)", syn["mg_2t_top"], scelta=syn["mg_2t"])
     if d.get("elo_c") is not None or d.get("elo_t") is not None:
         e1, e2, e3 = st.columns(3)
         e1.metric("ClubElo Casa", f"{d['elo_c']:.0f}" if d.get("elo_c") else "—")
