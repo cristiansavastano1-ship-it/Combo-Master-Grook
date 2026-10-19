@@ -2371,12 +2371,11 @@ with tab_calendario:
             finita = row.get("Stato") == "FINISHED" and gc is not None
             # % rapide modello
             try:
-                lh, la, _, _, _, _ = lambda_full(
-                    modello, casa, trasf, elo_map, form_map, ELO_BLEND, FORM_BLEND
-                )
-                syn = applica_affidabilita(sintesi_pronostico(matrice_punteggi(lh, la, modello["rho"])), cal, False)
+                d_r = distribuzione(casa, trasf)
+                syn = applica_affidabilita(sintesi_pronostico(d_r["M_1x2"]), cal, d_r["ancorata"])
+                gh, ga = gol_attesi(d_r["M_gol"])
             except Exception:
-                syn = None
+                syn, d_r, gh, ga = None, None, None, None
 
             c_left, c_mid, c_btn = st.columns([2.2, 3.6, 0.8])
             with c_left:
@@ -2388,14 +2387,15 @@ with tab_calendario:
                     st.caption(f"{row['Data']} · {row['Ora']}")
             with c_mid:
                 if syn:
+                    fonte = "quote" if d_r and d_r["ancorata"] else ("calibrato" if syn.get("calib") else "modello")
                     st.caption(
-                        f"Pron. **{syn['segno']}** · DC **{syn['dc']}** {syn['dc_p']*100:.0f}% · "
+                        f"Pron. **{syn['segno']}** ({fonte}) · DC **{syn['dc']}** {syn['dc_p']*100:.0f}% · "
                         f"{syn['combo']} {syn['combo_p']*100:.0f}% · {syn['ou']} {syn['ou_p']*100:.0f}% · MG **{syn['mg']}**"
                     )
                     st.caption(
                         f"1 {syn['p1']*100:.0f}% · X {syn['px']*100:.0f}% · 2 {syn['p2']*100:.0f}%"
+                        f"  ·  gol attesi {gh:.2f}-{ga:.2f}"
                         f"  ·  MG casa {syn['mg_casa']} · osp {syn['mg_osp']}"
-                        f"  ·  1T {syn['mg_1t']} · 2T {syn['mg_2t']}"
                     )
                 else:
                     st.caption("Probabilità non calcolabili")
