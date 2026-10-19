@@ -138,10 +138,13 @@ STAT_COLONNE = {"Tiri": ("HS", "AS"), "Tiri in Porta": ("HST", "AST"), "Corner":
 _STOP_NOMI = {
     "fc", "ac", "as", "cf", "afc", "acf", "ssc", "us", "ud", "rc", "rcd", "sv", "vfl", "vfb",
     "fsv", "tsg", "fk", "cd", "ca", "sc", "bv", "de", "calcio", "ogc", "sco",
+    "cfc", "sporting", "club", "milano",
 }
 _ALIAS_NOMI = {
     # Italia
     "inter": "inter", "internazionale": "inter",
+    "internazionale milano": "inter", "inter milan": "inter", "inter milano": "inter",
+    "fc internazionale milano": "inter",
     "verona": "hellas verona", "hellas verona": "hellas verona",
     "milan": "milan", "ac milan": "milan",
     "roma": "roma", "as roma": "roma",
@@ -2335,7 +2338,10 @@ def mostra_analisi(casa, trasf, data, ora):
     if d["ancorata"]:
         st.caption("Con quote reali le probabilità 1X2 coincidono col mercato (senza margine): non c'è edge automatico sul 1X2.")
     if casa not in modello["idx"] or trasf not in modello["idx"]:
-        st.caption("⚠ Una squadra senza storico (es. neopromossa) è trattata come media di lega.")
+        st.warning(
+            "Una delle due squadre non è nel modello (nome non riconosciuto o senza storico). "
+            "I gol attesi in quel caso sono la media di lega, non la media di quella squadra."
+        )
 
 
 # --- CALENDARIO / VISTA GIORNATA ---
