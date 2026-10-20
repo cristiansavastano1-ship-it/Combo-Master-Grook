@@ -1,97 +1,97 @@
-team,xg_for,xg_against,matches,league,season
-Bayern Munich,3.586,1.055,6,Bundesliga,2026
-Bayer Leverkusen,2.365,1.244,6,Bundesliga,2026
-RasenBallsport Leipzig,2.318,1.873,6,Bundesliga,2026
-Mainz 05,2.221,1.584,6,Bundesliga,2026
-VfB Stuttgart,2.158,2.311,6,Bundesliga,2026
-Augsburg,2.116,2.575,6,Bundesliga,2026
-Borussia Dortmund,2.022,1.082,6,Bundesliga,2026
-Hoffenheim,1.936,1.716,6,Bundesliga,2026
-Eintracht Frankfurt,1.862,2.201,6,Bundesliga,2026
-FC Cologne,1.817,1.83,6,Bundesliga,2026
-Freiburg,1.78,1.203,6,Bundesliga,2026
-Elversberg,1.757,2.468,6,Bundesliga,2026
-Borussia M.Gladbach,1.494,2.381,6,Bundesliga,2026
-Werder Bremen,1.4,1.748,6,Bundesliga,2026
-Union Berlin,1.255,2.143,6,Bundesliga,2026
-Schalke 04,1.226,2.243,6,Bundesliga,2026
-Hamburger SV,1.218,2.075,6,Bundesliga,2026
-Paderborn,1.09,2.132,6,Bundesliga,2026
-Manchester City,2.29,1.298,7,EPL,2026
-Brighton,2.14,1.437,7,EPL,2026
-Bournemouth,1.944,1.295,7,EPL,2026
-Arsenal,1.877,1.002,7,EPL,2026
-Manchester United,1.824,1.463,7,EPL,2026
-Brentford,1.789,1.555,7,EPL,2026
-Chelsea,1.761,1.713,7,EPL,2026
-Nottingham Forest,1.686,1.329,7,EPL,2026
-Fulham,1.593,1.662,7,EPL,2026
-Liverpool,1.587,1.364,7,EPL,2026
-Everton,1.565,1.507,7,EPL,2026
-Crystal Palace,1.539,2.078,7,EPL,2026
-Leeds,1.455,1.426,7,EPL,2026
-Sunderland,1.444,1.965,7,EPL,2026
-Ipswich,1.394,2.299,7,EPL,2026
-Newcastle United,1.347,1.761,7,EPL,2026
-Aston Villa,1.335,1.753,7,EPL,2026
-Tottenham,1.252,1.56,7,EPL,2026
-Coventry,1.112,1.683,7,EPL,2026
-Hull,1.056,1.751,7,EPL,2026
-Barcelona,3.945,1.033,9,La_Liga,2026
-Real Madrid,2.579,1.07,9,La_Liga,2026
-Villarreal,2.493,1.454,9,La_Liga,2026
-Atletico Madrid,1.942,1.107,9,La_Liga,2026
-Real Betis,1.907,1.903,9,La_Liga,2026
-Athletic Club,1.62,1.366,7,La_Liga,2026
-Levante,1.485,2.245,8,La_Liga,2026
-Real Sociedad,1.473,1.895,9,La_Liga,2026
-Osasuna,1.457,1.65,9,La_Liga,2026
-Rayo Vallecano,1.426,1.741,8,La_Liga,2026
-Alaves,1.426,1.152,9,La_Liga,2026
-Deportivo La Coruna,1.354,1.372,9,La_Liga,2026
-Sevilla,1.325,1.626,9,La_Liga,2026
-Racing Santander,1.27,2.314,9,La_Liga,2026
-Espanyol,1.254,1.411,9,La_Liga,2026
-Elche,1.197,2.047,9,La_Liga,2026
-Valencia,1.076,1.621,9,La_Liga,2026
-Celta Vigo,0.977,1.234,9,La_Liga,2026
-Malaga,0.917,1.994,9,La_Liga,2026
-Getafe,0.815,1.778,9,La_Liga,2026
-Paris Saint Germain,2.471,1.332,7,Ligue_1,2026
-Lens,2.232,1.458,7,Ligue_1,2026
-Rennes,2.125,2.022,7,Ligue_1,2026
-Brest,1.976,1.399,7,Ligue_1,2026
-Marseille,1.901,1.961,7,Ligue_1,2026
-Toulouse,1.818,1.405,7,Ligue_1,2026
-Paris FC,1.778,1.178,7,Ligue_1,2026
-Lyon,1.756,1.274,7,Ligue_1,2026
-Lille,1.583,1.394,7,Ligue_1,2026
-Le Mans,1.517,2.393,7,Ligue_1,2026
-Angers,1.431,2.001,7,Ligue_1,2026
-Auxerre,1.357,1.869,7,Ligue_1,2026
-Monaco,1.331,1.425,7,Ligue_1,2026
-Strasbourg,1.324,1.774,7,Ligue_1,2026
-Troyes,1.273,1.949,7,Ligue_1,2026
-Le Havre,1.241,1.848,7,Ligue_1,2026
-Lorient,1.237,1.222,7,Ligue_1,2026
-Nice,1.232,1.731,7,Ligue_1,2026
-Inter,2.894,1.247,7,Serie_A,2026
-Roma,2.359,1.128,7,Serie_A,2026
-Como,2.088,1.49,7,Serie_A,2026
-Napoli,1.953,1.137,7,Serie_A,2026
-AC Milan,1.929,1.283,7,Serie_A,2026
-Monza,1.865,1.765,7,Serie_A,2026
-Juventus,1.806,0.658,7,Serie_A,2026
-Venezia,1.772,2.549,7,Serie_A,2026
-Frosinone,1.692,2.336,7,Serie_A,2026
-Sassuolo,1.627,1.786,7,Serie_A,2026
-Lazio,1.572,1.338,7,Serie_A,2026
-Fiorentina,1.532,1.763,7,Serie_A,2026
-Bologna,1.488,1.486,7,Serie_A,2026
-Lecce,1.478,2.252,7,Serie_A,2026
-Atalanta,1.41,2.009,7,Serie_A,2026
-Torino,1.285,1.428,7,Serie_A,2026
-Cagliari,1.244,1.775,7,Serie_A,2026
-Udinese,1.199,2.183,7,Serie_A,2026
-Genoa,1.05,1.449,7,Serie_A,2026
-Parma Calcio 1913,0.879,1.893,7,Serie_A,2026
+team,league,season,matches,xg_for,xg_against,npx_g_for
+Bayern Munich,Bundesliga,2026,6,3.586,1.055,3.417
+Bayer Leverkusen,Bundesliga,2026,6,2.365,1.244,2.312
+RasenBallsport Leipzig,Bundesliga,2026,6,2.318,1.873,2.298
+Mainz 05,Bundesliga,2026,6,2.221,1.584,2.055
+VfB Stuttgart,Bundesliga,2026,6,2.158,2.311,2.112
+Augsburg,Bundesliga,2026,6,2.116,2.575,1.899
+Borussia Dortmund,Bundesliga,2026,6,2.022,1.082,1.962
+Hoffenheim,Bundesliga,2026,6,1.936,1.716,1.808
+Eintracht Frankfurt,Bundesliga,2026,6,1.862,2.201,1.822
+FC Cologne,Bundesliga,2026,6,1.817,1.83,1.709
+Freiburg,Bundesliga,2026,6,1.78,1.203,1.74
+Elversberg,Bundesliga,2026,6,1.757,2.468,1.476
+Borussia M.Gladbach,Bundesliga,2026,6,1.494,2.381,1.277
+Werder Bremen,Bundesliga,2026,6,1.4,1.748,1.285
+Union Berlin,Bundesliga,2026,6,1.255,2.143,1.222
+Schalke 04,Bundesliga,2026,6,1.226,2.243,1.226
+Hamburger SV,Bundesliga,2026,6,1.218,2.075,1.177
+Paderborn,Bundesliga,2026,6,1.09,2.132,1.09
+Manchester City,EPL,2026,7,2.29,1.298,2.266
+Brighton,EPL,2026,7,2.14,1.437,2.033
+Bournemouth,EPL,2026,7,1.944,1.295,1.908
+Arsenal,EPL,2026,7,1.877,1.002,1.776
+Manchester United,EPL,2026,7,1.824,1.463,1.711
+Brentford,EPL,2026,7,1.789,1.555,1.652
+Chelsea,EPL,2026,7,1.761,1.713,1.713
+Nottingham Forest,EPL,2026,7,1.686,1.329,1.591
+Fulham,EPL,2026,7,1.593,1.662,1.563
+Liverpool,EPL,2026,7,1.587,1.364,1.498
+Everton,EPL,2026,7,1.565,1.507,1.553
+Crystal Palace,EPL,2026,7,1.539,2.078,1.491
+Leeds,EPL,2026,7,1.455,1.426,1.406
+Sunderland,EPL,2026,7,1.444,1.965,1.262
+Ipswich,EPL,2026,7,1.394,2.299,1.285
+Newcastle United,EPL,2026,7,1.347,1.761,1.235
+Aston Villa,EPL,2026,7,1.335,1.753,1.335
+Tottenham,EPL,2026,7,1.252,1.56,1.252
+Coventry,EPL,2026,7,1.112,1.683,1.003
+Hull,EPL,2026,7,1.056,1.751,1.056
+Barcelona,La_Liga,2026,9,3.945,1.033,3.532
+Real Madrid,La_Liga,2026,9,2.579,1.07,2.331
+Villarreal,La_Liga,2026,9,2.493,1.454,2.245
+Atletico Madrid,La_Liga,2026,9,1.942,1.107,1.777
+Real Betis,La_Liga,2026,9,1.907,1.903,1.824
+Athletic Club,La_Liga,2026,7,1.62,1.366,1.509
+Levante,La_Liga,2026,8,1.485,2.245,1.485
+Real Sociedad,La_Liga,2026,9,1.473,1.895,1.391
+Osasuna,La_Liga,2026,9,1.457,1.65,1.127
+Rayo Vallecano,La_Liga,2026,8,1.426,1.741,1.426
+Alaves,La_Liga,2026,9,1.426,1.152,1.344
+Deportivo La Coruna,La_Liga,2026,9,1.354,1.372,1.272
+Sevilla,La_Liga,2026,9,1.325,1.626,1.16
+Racing Santander,La_Liga,2026,9,1.27,2.314,1.105
+Espanyol,La_Liga,2026,9,1.254,1.411,1.254
+Elche,La_Liga,2026,9,1.197,2.047,1.115
+Valencia,La_Liga,2026,9,1.076,1.621,1.076
+Celta Vigo,La_Liga,2026,9,0.977,1.234,0.894
+Malaga,La_Liga,2026,9,0.917,1.994,0.752
+Getafe,La_Liga,2026,9,0.815,1.778,0.815
+Paris Saint Germain,Ligue_1,2026,7,2.471,1.332,2.189
+Lens,Ligue_1,2026,7,2.232,1.458,1.97
+Rennes,Ligue_1,2026,7,2.125,2.022,1.781
+Brest,Ligue_1,2026,7,1.976,1.399,1.77
+Marseille,Ligue_1,2026,7,1.901,1.961,1.605
+Toulouse,Ligue_1,2026,7,1.818,1.405,1.619
+Paris FC,Ligue_1,2026,7,1.778,1.178,1.509
+Lyon,Ligue_1,2026,7,1.756,1.274,1.722
+Lille,Ligue_1,2026,7,1.583,1.394,1.453
+Le Mans,Ligue_1,2026,7,1.517,2.393,1.409
+Angers,Ligue_1,2026,7,1.431,2.001,1.321
+Auxerre,Ligue_1,2026,7,1.357,1.869,1.247
+Monaco,Ligue_1,2026,7,1.331,1.425,1.283
+Strasbourg,Ligue_1,2026,7,1.324,1.774,1.276
+Troyes,Ligue_1,2026,7,1.273,1.949,1.164
+Le Havre,Ligue_1,2026,7,1.241,1.848,1.123
+Lorient,Ligue_1,2026,7,1.237,1.222,1.112
+Nice,Ligue_1,2026,7,1.232,1.731,1.212
+Inter,Serie_A,2026,7,2.894,1.247,2.781
+Roma,Serie_A,2026,7,2.359,1.128,2.317
+Como,Serie_A,2026,7,2.088,1.49,2.04
+Napoli,Serie_A,2026,7,1.953,1.137,1.771
+AC Milan,Serie_A,2026,7,1.929,1.283,1.722
+Monza,Serie_A,2026,7,1.865,1.765,1.756
+Juventus,Serie_A,2026,7,1.806,0.658,1.775
+Venezia,Serie_A,2026,7,1.772,2.549,1.664
+Frosinone,Serie_A,2026,7,1.692,2.336,1.692
+Sassuolo,Serie_A,2026,7,1.627,1.786,1.6
+Lazio,Serie_A,2026,7,1.572,1.338,1.465
+Fiorentina,Serie_A,2026,7,1.532,1.763,1.496
+Bologna,Serie_A,2026,7,1.488,1.486,1.446
+Lecce,Serie_A,2026,7,1.478,2.252,1.466
+Atalanta,Serie_A,2026,7,1.41,2.009,1.392
+Torino,Serie_A,2026,7,1.285,1.428,1.242
+Cagliari,Serie_A,2026,7,1.244,1.775,1.156
+Udinese,Serie_A,2026,7,1.199,2.183,1.169
+Genoa,Serie_A,2026,7,1.05,1.449,0.92
+Parma Calcio 1913,Serie_A,2026,7,0.879,1.893,0.867
