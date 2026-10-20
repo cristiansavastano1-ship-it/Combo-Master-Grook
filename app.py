@@ -1,7 +1,6 @@
-_"""
-Combo Master Grook — v4.12
-Dixon-Coles + walk-forward + confronto quote reali + calibrazione
-"""
+# Combo Master Grook — v4.12
+# Dixon-Coles + walk-forward + calibrazione + confronto quote
+# ClubElo offline (data/clubelo.csv) + Understat xG offline
 
 import difflib
 import io
