@@ -1,5 +1,5 @@
 """
-Combo Master Grook — v4.11
+Combo Master Grook — v4.12
 Dixon-Coles + walk-forward + confronto quote reali + calibrazione
 """
 
@@ -66,7 +66,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.11</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.12</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -490,12 +490,34 @@ def carica_fixtures(div: str):
 
 
 # ======================= CLUBELO (gratis, no key) =======================
-@st.cache_data(ttl=12 * 3600, show_spinner="Scarico rating ClubElo (cache 12h)...")
+@st.cache_data(ttl=12 * 3600, show_spinner="Carico rating ClubElo...")
 def carica_clubelo(giorno: str):
     """
-    Rating Elo ClubElo per TUTTE le squadre europee (non solo Serie A).
-    Fonte: api.clubelo.com/YYYY-MM-DD — CSV, nessuna chiave.
+    Prima prova CSV offline (data/clubelo.csv), poi API ClubElo.
     """
+    # 1) Offline
+    for rel in ("data/clubelo.csv", "clubelo.csv"):
+        for fp in (Path(rel), Path.cwd() / rel):
+            try:
+                if not fp.is_file() or fp.stat().st_size < 20:
+                    continue
+                df = pd.read_csv(fp)
+                cols = {c.lower().strip(): c for c in df.columns}
+                club_c = cols.get("club") or cols.get("team") or cols.get("squadra")
+                elo_c = cols.get("elo") or cols.get("rating")
+                if not club_c or not elo_c:
+                    continue
+                df = df.dropna(subset=[club_c]).copy()
+                df["Elo"] = pd.to_numeric(df[elo_c], errors="coerce")
+                df = df.dropna(subset=["Elo"])
+                df["Club"] = df[club_c].astype(str)
+                df["norm"] = df["Club"].map(_norm_sq)
+                if len(df) >= 10:
+                    return df[["Club", "Elo", "norm"]].reset_index(drop=True)
+            except Exception:
+                continue
+
+    # 2) API (se offline non c'è)
     base = date.fromisoformat(giorno) if isinstance(giorno, str) else date.today()
     bases = [CLUBELO_URL, CLUBELO_URL.replace("http://", "https://")]
     for delta in range(0, 7):
