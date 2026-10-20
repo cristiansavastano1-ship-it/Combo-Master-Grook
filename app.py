@@ -729,7 +729,7 @@ def mappa_understat(squadre, df_u):
                 best_s = s
                 best = {"xg_for": float(xgf), "xg_against": float(xga) if np.isfinite(xga) else None,
                         "name": str(raw), "sim": round(s, 2)}
-        if best and best_s >= 0.72:
+        if best and best_s >= 0.78:
             out[sq] = best
     return out
 
@@ -2370,6 +2370,39 @@ def mostra_analisi(casa, trasf, data, ora):
     flat = sorted(((i, j, M[i, j]) for i in range(M.shape[0]) for j in range(M.shape[1])), key=lambda t: t[2], reverse=True)[:3]
     for col, medaglia, nome, (i, j, p) in zip(st.columns(3), ["🥇", "🥈", "🥉"], ["1°", "2°", "3°"], flat):
         col.info(f"{medaglia} {nome}: **{i} - {j}** ({p*100:.1f}%)")
+    # Presentazione: risultato più probabile vs mercato largo (senza toccare la matrice)
+    if flat:
+        bi, bj, bp = flat[0]
+        if bi > bj:
+            lato_es = "1"
+        elif bi < bj:
+            lato_es = "2"
+        else:
+            lato_es = "X"
+        tot_es = bi + bj
+        if tot_es >= 3:
+            stretto = f"{lato_es} + Over 2.5"
+        elif tot_es <= 2:
+            stretto = f"{lato_es} + Under 2.5"
+        else:
+            stretto = lato_es
+        st.markdown(
+            f"""
+            <div style="margin-top:10px; padding:12px 14px; background:#0f172a; border:1px solid #334155;
+                        border-radius:12px; line-height:1.55;">
+              <div style="color:#e2e8f0; font-size:0.92rem;">
+                <strong style="color:#38bdf8;">Risultato più probabile:</strong>
+                {bi}-{bj} ({bp*100:.1f}%) → <span style="color:#a5b4fc;">{stretto}</span>
+              </div>
+              <div style="color:#e2e8f0; font-size:0.92rem; margin-top:6px;">
+                <strong style="color:#f472b6;">Mercato largo:</strong>
+                {syn.get("ou", "—")} ({syn.get("ou_p", 0)*100:.0f}%)
+                <span style="color:#64748b; font-size:0.8rem;"> · somma più esiti, non solo il punteggio top</span>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     if d["ancorata"]:
         st.caption("Con quote reali le probabilità 1X2 coincidono col mercato (senza margine): non c'è edge automatico sul 1X2.")
     if casa not in modello["idx"] or trasf not in modello["idx"]:
