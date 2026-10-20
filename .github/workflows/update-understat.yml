@@ -1,9 +1,9 @@
-name: Update Understat xG
+name: Update Understat + ClubElo
 
 on:
   schedule:
-    - cron: "0 6 * * *"
-  workflow_dispatch: {}
+    - cron: "0 6 * * 1"   # ogni lunedì alle 06:00 UTC
+  workflow_dispatch: {}   # pulsante "Run workflow" manuale
 
 permissions:
   contents: write
@@ -24,14 +24,17 @@ jobs:
       - name: Fetch Understat xG
         run: python scripts/fetch_understat.py
 
+      - name: Fetch ClubElo
+        run: python scripts/fetch_clubelo.py
+
       - name: Commit if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/understat_xg.csv || true
+          git add data/understat_xg.csv data/clubelo.csv || true
           if git diff --staged --quiet; then
-            echo "Nessuna modifica al CSV"
+            echo "Nessuna modifica ai CSV"
           else
-            git commit -m "chore: update understat xG $(date -u +%Y-%m-%d)"
+            git commit -m "chore: update Understat xG + ClubElo $(date -u +%Y-%m-%d)"
             git push
           fi
