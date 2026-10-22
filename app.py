@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.15
+# Combo Master Grook — v4.16
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -65,7 +65,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.15</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.16</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -955,6 +955,233 @@ def scarica_odds_api_football(div: str, api_key: str, giorno: str):
     except Exception:
         pass
     return out
+
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def scarica_hint_giocatori(team_id: int, league_id: int, season: int, api_key: str):
+    """
+    Stats giocatori di una squadra (gol e gialli). 1 req, cache 12h.
+    Ritorna {"marcatori": [(nome, gol, min)], "ammoniti": [(nome, gialli, min)]}.
+    """
+    vuoto = {"marcatori": [], "ammoniti": []}
+    if not api_key or not team_id:
+        return vuoto
+    headers = _api_headers(api_key)
+    try:
+        r = requests.get(
+            f"{API_FOOTBALL_BASE}/players",
+            headers=headers,
+            params={
+                "team": int(team_id),
+                "season": int(season),
+                "league": int(league_id),
+                "page": 1,
+            },
+            timeout=25,
+        )
+        if r.status_code != 200:
+            return vuoto
+        data = (r.json() or {}).get("response") or []
+    except Exception:
+        return vuoto
+
+    marcatori, ammoniti = [], []
+    for item in data:
+        player = item.get("player") or {}
+        nome = player.get("name") or ""
+        if not nome:
+            continue
+        goals = yellows = minutes = 0
+        for stt in (item.get("statistics") or []):
+            g = (stt.get("goals") or {}).get("total")
+            cards = stt.get("cards") or {}
+            y = cards.get("yellow")
+            m = (stt.get("games") or {}).get("minutes")
+            try:
+                if g is not None:
+                    goals += int(g)
+            except (TypeError, ValueError):
+                pass
+            try:
+                if y is not None:
+                    yellows += int(y)
+            except (TypeError, ValueError):
+                pass
+            try:
+                if m is not None:
+                    minutes += int(m)
+            except (TypeError, ValueError):
+                pass
+        if goals > 0:
+            marcatori.append((nome, goals, minutes))
+        if yellows > 0:
+            ammoniti.append((nome, yellows, minutes))
+
+    def _rank(rows):
+        def key(t):
+            _n, stat, mins = t
+            if mins and mins >= 90:
+                return (stat / mins) * 90.0
+            return float(stat) * 0.5
+        return sorted(rows, key=key, reverse=True)[:5]
+
+    return {"marcatori": _rank(marcatori), "ammoniti": _rank(ammoniti)}
+
+
+def hint_giocatori_partita(casa: str, trasf: str, div: str, api_key: str, giorno: str):
+    """
+    Associa squadre della scheda agli id API e scarica hint.
+    Max 2 req per partita (cache 12h per team).
+    Se i fixtures lega sono 0, prova ricerca per nome squadra.
+    """
+    if not api_key or div not in API_FOOTBALL_LEAGUE_ID:
+        return None
+    league_id = API_FOOTBALL_LEAGUE_ID[div]
+    season = _stagione_api_football()
+    headers = _api_headers(api_key)
+
+    fixtures = _fixtures_api_football(div, api_key, giorno)
+    best, best_s = None, 0.0
+    nc, nt = _norm_sq(casa), _norm_sq(trasf)
+    for fx in fixtures or []:
+        s = 0.5 * (
+            _similarita(nc, _norm_sq(fx["home"]))
+            + _similarita(nt, _norm_sq(fx["away"]))
+        )
+        if s > best_s:
+            best_s, best = s, fx
+
+    home_id = away_id = None
+    if best and best_s >= 0.60:
+        home_id, away_id = best.get("home_id"), best.get("away_id")
+
+    # Fallback: cerca team per nome se fixtures vuoti o match debole
+    def _team_id_by_name(nome: str):
+        try:
+            r = requests.get(
+                f"{API_FOOTBALL_BASE}/teams",
+                headers=headers,
+                params={"search": nome},
+                timeout=15,
+            )
+            if r.status_code != 200:
+                return None
+            resp = (r.json() or {}).get("response") or []
+            if not resp:
+                return None
+            # scegli il più simile
+            best_id, bs = None, 0.0
+            for item in resp[:8]:
+                t = item.get("team") or {}
+                s = _similarita(_norm_sq(nome), _norm_sq(t.get("name") or ""))
+                if s > bs:
+                    bs, best_id = s, t.get("id")
+            return best_id if bs >= 0.55 else None
+        except Exception:
+            return None
+
+    if not home_id:
+        home_id = _team_id_by_name(casa)
+    if not away_id:
+        away_id = _team_id_by_name(trasf)
+    if not home_id and not away_id:
+        return None
+
+    # prova stagione corrente e precedente per stats
+    def _hints(tid):
+        if not tid:
+            return {"marcatori": [], "ammoniti": []}
+        for seas in (season, season - 1):
+            h = scarica_hint_giocatori(tid, league_id, seas, api_key)
+            if h["marcatori"] or h["ammoniti"]:
+                return h
+            # senza filtro league (stats totali stagione)
+            h2 = scarica_hint_giocatori(tid, 0, seas, api_key) if False else h
+            if h["marcatori"] or h["ammoniti"]:
+                return h
+        return {"marcatori": [], "ammoniti": []}
+
+    # Se league_id con season non dà stats, riprova senza league (param opzionale)
+    def _hints_flex(tid):
+        if not tid:
+            return {"marcatori": [], "ammoniti": []}
+        for seas in (season, season - 1):
+            h = scarica_hint_giocatori(tid, league_id, seas, api_key)
+            if h["marcatori"] or h["ammoniti"]:
+                return h
+        # ultima chance: endpoint senza league (team+season only) — nuova cache key
+        for seas in (season, season - 1):
+            h = _scarica_hint_giocatori_no_league(tid, seas, api_key)
+            if h["marcatori"] or h["ammoniti"]:
+                return h
+        return {"marcatori": [], "ammoniti": []}
+
+    return {
+        "home": casa,
+        "away": trasf,
+        "sim": round(best_s, 2) if best else 0.0,
+        "casa": _hints_flex(home_id),
+        "trasf": _hints_flex(away_id),
+    }
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def _scarica_hint_giocatori_no_league(team_id: int, season: int, api_key: str):
+    """Come scarica_hint_giocatori ma senza filtro league (utile se la lega non matcha)."""
+    vuoto = {"marcatori": [], "ammoniti": []}
+    if not api_key or not team_id:
+        return vuoto
+    headers = _api_headers(api_key)
+    try:
+        r = requests.get(
+            f"{API_FOOTBALL_BASE}/players",
+            headers=headers,
+            params={"team": int(team_id), "season": int(season), "page": 1},
+            timeout=25,
+        )
+        if r.status_code != 200:
+            return vuoto
+        data = (r.json() or {}).get("response") or []
+    except Exception:
+        return vuoto
+    marcatori, ammoniti = [], []
+    for item in data:
+        player = item.get("player") or {}
+        nome = player.get("name") or ""
+        if not nome:
+            continue
+        goals = yellows = minutes = 0
+        for stt in (item.get("statistics") or []):
+            g = (stt.get("goals") or {}).get("total")
+            y = (stt.get("cards") or {}).get("yellow")
+            m = (stt.get("games") or {}).get("minutes")
+            try:
+                goals += int(g or 0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                yellows += int(y or 0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                minutes += int(m or 0)
+            except (TypeError, ValueError):
+                pass
+        if goals > 0:
+            marcatori.append((nome, goals, minutes))
+        if yellows > 0:
+            ammoniti.append((nome, yellows, minutes))
+
+    def _rank(rows):
+        def key(t):
+            _n, stat, mins = t
+            if mins and mins >= 90:
+                return (stat / mins) * 90.0
+            return float(stat) * 0.5
+        return sorted(rows, key=key, reverse=True)[:5]
+
+    return {"marcatori": _rank(marcatori), "ammoniti": _rank(ammoniti)}
 
 
 def _match_quote_api(api_odds: dict, casa: str, trasf: str):
@@ -2545,8 +2772,12 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
     _div_now = div_sel or ""
     _giorno_now = giorno_sel or date.today().isoformat()
     if _af_key and _div_now:
-        with st.spinner("Hint giocatori (cache 12h)..."):
-            hints = hint_giocatori_partita(casa, trasf, _div_now, _af_key, _giorno_now)
+        hints = None
+        try:
+            with st.spinner("Hint giocatori (cache 12h)..."):
+                hints = hint_giocatori_partita(casa, trasf, _div_now, _af_key, _giorno_now)
+        except Exception as _e_hint:
+            st.caption(f"Hint giocatori non disponibili ({type(_e_hint).__name__}).")
         if hints:
             st.markdown("#### Possibili marcatori · indicativo")
             st.caption(
