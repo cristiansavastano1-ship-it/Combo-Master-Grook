@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.12
+# Combo Master Grook — v4.13
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -65,7 +65,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.12</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.13</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -220,6 +220,29 @@ _ALIAS_NOMI = {
     "forest": "nottingham forest",
     "hamburger sv": "hamburg",
     "elversberg": "elversberg",
+    "paris saint germain": "paris sg",
+    "paris saint-germain": "paris sg",
+    "sporting cp": "sporting",
+    "sporting lisbon": "sporting",
+    "fc porto": "porto",
+    "sl benfica": "benfica",
+    "psv eindhoven": "psv",
+    "club brugge": "brugge",
+    "club brugge kv": "brugge",
+    "shakhtar donetsk": "shakhtar donetsk",
+    "shakhtar": "shakhtar donetsk",
+    "crvena zvezda": "crvena zvezda",
+    "red star belgrade": "crvena zvezda",
+    "galatasaray": "galatasaray",
+    "fenerbahce": "fenerbahce",
+    "olympiacos": "olympiacos",
+    "olympiakos": "olympiacos",
+    "rb salzburg": "salzburg",
+    "salzburg": "salzburg",
+    "bodo glimt": "bodo glimt",
+    "dynamo kyiv": "dynamo kyiv",
+    "dynamo kiev": "dynamo kyiv",
+
 
 }
 
@@ -776,39 +799,112 @@ def _stagione_api_football() -> int:
     return oggi.year if oggi.month >= 7 else oggi.year - 1
 
 
+def _api_headers(api_key: str) -> dict:
+    return {"x-apisports-key": api_key}
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _fixtures_api_football(div: str, api_key: str, giorno: str):
+    """
+    Lista fixtures future per la lega (max ~12).
+    CL/EL: finestra date 0–21 giorni (le coppe non hanno 'giornata' come i campionati).
+    Campionati: next=12.
+    """
+    if not api_key or div not in API_FOOTBALL_LEAGUE_ID:
+        return []
+    league_id = API_FOOTBALL_LEAGUE_ID[div]
+    season = _stagione_api_football()
+    headers = _api_headers(api_key)
+    fixtures = []
+
+    def _parse(resp_json):
+        rows = []
+        for fx in (resp_json or {}).get("response") or []:
+            fi = fx.get("fixture") or {}
+            teams = fx.get("teams") or {}
+            home = teams.get("home") or {}
+            away = teams.get("away") or {}
+            hid, aid = home.get("id"), away.get("id")
+            hn, an = home.get("name") or "", away.get("name") or ""
+            fid = fi.get("id")
+            if not fid or not hn or not an:
+                continue
+            rows.append({
+                "fid": fid,
+                "home": hn,
+                "away": an,
+                "home_id": hid,
+                "away_id": aid,
+                "date": (fi.get("date") or "")[:10],
+            })
+        return rows
+
+    try:
+        if div in ("CL", "EL"):
+            base = date.fromisoformat(giorno) if giorno else date.today()
+            # una sola req con from/to (risparmia quota)
+            d0 = base.isoformat()
+            d1 = (base + pd.Timedelta(days=21)).strftime("%Y-%m-%d")
+            r = requests.get(
+                f"{API_FOOTBALL_BASE}/fixtures",
+                headers=headers,
+                params={"league": league_id, "season": season, "from": d0, "to": d1},
+                timeout=25,
+            )
+            if r.status_code == 200:
+                fixtures = _parse(r.json())
+            # fallback next se vuoto (stagione/coppa)
+            if not fixtures:
+                r2 = requests.get(
+                    f"{API_FOOTBALL_BASE}/fixtures",
+                    headers=headers,
+                    params={"league": league_id, "season": season, "next": 15},
+                    timeout=20,
+                )
+                if r2.status_code == 200:
+                    fixtures = _parse(r2.json())
+            # ultima chance: stagione precedente (inizio stagione UEFA)
+            if not fixtures:
+                r3 = requests.get(
+                    f"{API_FOOTBALL_BASE}/fixtures",
+                    headers=headers,
+                    params={"league": league_id, "season": season - 1, "next": 10},
+                    timeout=20,
+                )
+                if r3.status_code == 200:
+                    fixtures = _parse(r3.json())
+        else:
+            r = requests.get(
+                f"{API_FOOTBALL_BASE}/fixtures",
+                headers=headers,
+                params={"league": league_id, "season": season, "next": 12},
+                timeout=20,
+            )
+            if r.status_code == 200:
+                fixtures = _parse(r.json())
+    except Exception:
+        return []
+    return fixtures[:12]
+
+
 @st.cache_data(ttl=6 * 3600, show_spinner="Scarico quote da API-Football (cache 6h)...")
 def scarica_odds_api_football(div: str, api_key: str, giorno: str):
     """
     Quote 1X2 e O/U 2.5 per il prossimo turno.
-    Strategia a basso consumo (free = 100 req/giorno):
-      1) /fixtures?league&season&next=12  → 1 req
-      2) /odds?fixture=id per al massimo 8 partite  → fino a 8 req
-    Totale ≤ 9 req per lega, cache 6 ore. 8 leghe ≈ 72 req/giorno nel worst case.
+    CL/EL incluse (fixtures per finestra date).
+    ≤ 1 + min(8, n_fixtures) req per lega, cache 6h.
     Ritorna dict {(home_norm, away_norm): (p1x2, p_over25|None, home, away)}.
     """
     if not api_key or div not in API_FOOTBALL_LEAGUE_ID:
         return {}
-    league_id = API_FOOTBALL_LEAGUE_ID[div]
-    season = _stagione_api_football()
-    headers = {"x-apisports-key": api_key}
+    fixtures = _fixtures_api_football(div, api_key, giorno)
+    if not fixtures:
+        return {}
+    headers = _api_headers(api_key)
     out = {}
     try:
-        r = requests.get(
-            f"{API_FOOTBALL_BASE}/fixtures",
-            headers=headers,
-            params={"league": league_id, "season": season, "next": 12},
-            timeout=20,
-        )
-        if r.status_code != 200:
-            return {}
-        fixtures = (r.json() or {}).get("response") or []
         for fx in fixtures[:8]:
-            fid = (fx.get("fixture") or {}).get("id")
-            teams = fx.get("teams") or {}
-            home = (teams.get("home") or {}).get("name") or ""
-            away = (teams.get("away") or {}).get("name") or ""
-            if not fid or not home or not away:
-                continue
+            fid, home, away = fx["fid"], fx["home"], fx["away"]
             try:
                 ro = requests.get(
                     f"{API_FOOTBALL_BASE}/odds",
@@ -860,6 +956,107 @@ def scarica_odds_api_football(div: str, api_key: str, giorno: str):
     except Exception:
         pass
     return out
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def scarica_hint_giocatori(team_id: int, league_id: int, season: int, api_key: str):
+    """
+    Stats giocatori di una squadra (gol e gialli). 1 req, cache 12h.
+    Ritorna {"marcatori": [(nome, gol, min)], "ammoniti": [(nome, gialli, min)]}.
+    """
+    vuoto = {"marcatori": [], "ammoniti": []}
+    if not api_key or not team_id:
+        return vuoto
+    headers = _api_headers(api_key)
+    try:
+        r = requests.get(
+            f"{API_FOOTBALL_BASE}/players",
+            headers=headers,
+            params={"team": int(team_id), "season": int(season), "league": int(league_id), "page": 1},
+            timeout=25,
+        )
+        if r.status_code != 200:
+            return vuoto
+        data = (r.json() or {}).get("response") or []
+    except Exception:
+        return vuoto
+
+    marcatori, ammoniti = [], []
+    for item in data:
+        player = item.get("player") or {}
+        nome = player.get("name") or ""
+        if not nome:
+            continue
+        goals = yellows = minutes = 0
+        for stt in (item.get("statistics") or []):
+            g = (stt.get("goals") or {}).get("total")
+            cards = stt.get("cards") or {}
+            y = cards.get("yellow")
+            m = (stt.get("games") or {}).get("minutes")
+            try:
+                if g is not None:
+                    goals += int(g)
+            except (TypeError, ValueError):
+                pass
+            try:
+                if y is not None:
+                    yellows += int(y)
+            except (TypeError, ValueError):
+                pass
+            try:
+                if m is not None:
+                    minutes += int(m)
+            except (TypeError, ValueError):
+                pass
+        if goals > 0:
+            marcatori.append((nome, goals, minutes))
+        if yellows > 0:
+            ammoniti.append((nome, yellows, minutes))
+
+    def _rank(rows, idx_stat):
+        # priorità: stat/90 se minuti>0, altrimenti stat grezza
+        def key(t):
+            nome, stat, mins = t
+            if mins and mins >= 90:
+                return (stat / mins) * 90.0
+            return float(stat) * 0.5
+        return sorted(rows, key=key, reverse=True)[:5]
+
+    return {
+        "marcatori": _rank(marcatori, 1),
+        "ammoniti": _rank(ammoniti, 1),
+    }
+
+
+def hint_giocatori_partita(casa: str, trasf: str, div: str, api_key: str, giorno: str):
+    """
+    Associa squadre della scheda agli id API (dai fixtures) e scarica hint.
+    Max 2 req aggiuntive per partita (cache 12h per team).
+    """
+    if not api_key or div not in API_FOOTBALL_LEAGUE_ID:
+        return None
+    fixtures = _fixtures_api_football(div, api_key, giorno)
+    if not fixtures:
+        return None
+    nc, nt = _norm_sq(casa), _norm_sq(trasf)
+    best, best_s = None, 0.0
+    for fx in fixtures:
+        s = 0.5 * (_similarita(nc, _norm_sq(fx["home"])) + _similarita(nt, _norm_sq(fx["away"])))
+        if s > best_s:
+            best_s, best = s, fx
+    if not best or best_s < 0.72:
+        return None
+    league_id = API_FOOTBALL_LEAGUE_ID[div]
+    season = _stagione_api_football()
+    h = scarica_hint_giocatori(best.get("home_id"), league_id, season, api_key)
+    a = scarica_hint_giocatori(best.get("away_id"), league_id, season, api_key)
+    return {
+        "home": best["home"],
+        "away": best["away"],
+        "sim": round(best_s, 2),
+        "casa": h,
+        "trasf": a,
+    }
 
 
 def _match_quote_api(api_odds: dict, casa: str, trasf: str):
@@ -1942,8 +2139,8 @@ chiave_af = st.sidebar.text_input(
     "🔑 API-Football / api-sports (quote)", value=_af_default, type="password",
 )
 st.sidebar.caption(
-    "Quote 1X2 e O/U pre-match. Free = 100 req/giorno. "
-    "Cache 6h → ~1 richiesta per lega ogni 6 ore."
+    "Quote 1X2 e O/U pre-match (anche CL/EL). Free = 100 req/giorno. "
+    "Cache 6h quote · 12h giocatori. Apri poche leghe al giorno."
 )
 st.sidebar.markdown("---")
 st.sidebar.info(
@@ -2403,6 +2600,72 @@ def mostra_analisi(casa, trasf, data, ora):
             """,
             unsafe_allow_html=True,
         )
+
+    # Marcatori / ammoniti (indicativo, da API-Football stats — non dal modello Dixon-Coles)
+    try:
+        _af_key = chiave_af if "chiave_af" in dir() else ""
+        _div_now = div if "div" in dir() else ""
+        _giorno_now = giorno if "giorno" in dir() else date.today().isoformat()
+    except Exception:
+        _af_key, _div_now, _giorno_now = "", "", date.today().isoformat()
+    if _af_key and _div_now:
+        with st.spinner("Hint giocatori (cache 12h)..."):
+            hints = hint_giocatori_partita(casa, trasf, _div_now, _af_key, _giorno_now)
+        if hints:
+            st.markdown("#### Possibili marcatori · indicativo")
+            st.caption(
+                "Dalle stats stagione API-Football (gol e minuti), non dal modello a matrice. "
+                "Non è un ranking di quote anytime scorer."
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(f"**{casa}**")
+                rows = hints["casa"]["marcatori"]
+                if rows:
+                    for nome, gol, mins in rows:
+                        extra = f" · {mins}'" if mins else ""
+                        st.write(f"- {nome} — {gol} gol{extra}")
+                else:
+                    st.caption("Nessun dato gol")
+            with c2:
+                st.markdown(f"**{trasf}**")
+                rows = hints["trasf"]["marcatori"]
+                if rows:
+                    for nome, gol, mins in rows:
+                        extra = f" · {mins}'" if mins else ""
+                        st.write(f"- {nome} — {gol} gol{extra}")
+                else:
+                    st.caption("Nessun dato gol")
+
+            st.markdown("#### Possibili ammoniti · indicativo")
+            st.caption(
+                "Ordine per gialli/90 (o gialli grezzi se pochi minuti). "
+                "Senza storico arbitro: solo tendenza disciplinare."
+            )
+            c3, c4 = st.columns(2)
+            with c3:
+                st.markdown(f"**{casa}**")
+                rows = hints["casa"]["ammoniti"]
+                if rows:
+                    for nome, y, mins in rows:
+                        extra = f" · {mins}'" if mins else ""
+                        st.write(f"- {nome} — {y} gialli{extra}")
+                else:
+                    st.caption("Nessun dato gialli")
+            with c4:
+                st.markdown(f"**{trasf}**")
+                rows = hints["trasf"]["ammoniti"]
+                if rows:
+                    for nome, y, mins in rows:
+                        extra = f" · {mins}'" if mins else ""
+                        st.write(f"- {nome} — {y} gialli{extra}")
+                else:
+                    st.caption("Nessun dato gialli")
+        elif _div_now in ("CL", "EL"):
+            st.caption(
+                "Hint giocatori non disponibili: fixtures CL/EL non abbinate o quota API esaurita."
+            )
+
     if d["ancorata"]:
         st.caption("Con quote reali le probabilità 1X2 coincidono col mercato (senza margine): non c'è edge automatico sul 1X2.")
     if casa not in modello["idx"] or trasf not in modello["idx"]:
