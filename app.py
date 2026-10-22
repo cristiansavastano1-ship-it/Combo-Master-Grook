@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.16
+# Combo Master Grook — v4.17
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -65,7 +65,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.16</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.17</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -1031,157 +1031,167 @@ def scarica_hint_giocatori(team_id: int, league_id: int, season: int, api_key: s
 
 def hint_giocatori_partita(casa: str, trasf: str, div: str, api_key: str, giorno: str):
     """
-    Associa squadre della scheda agli id API e scarica hint.
-    Max 2 req per partita (cache 12h per team).
-    Se i fixtures lega sono 0, prova ricerca per nome squadra.
+    Hint marcatori/ammoniti da API-Football.
+    Non dipende dai fixtures della giornata: cerca le squadre per nome.
     """
     if not api_key or div not in API_FOOTBALL_LEAGUE_ID:
         return None
     league_id = API_FOOTBALL_LEAGUE_ID[div]
     season = _stagione_api_football()
     headers = _api_headers(api_key)
+    debug = []
 
-    fixtures = _fixtures_api_football(div, api_key, giorno)
-    best, best_s = None, 0.0
-    nc, nt = _norm_sq(casa), _norm_sq(trasf)
-    for fx in fixtures or []:
-        s = 0.5 * (
-            _similarita(nc, _norm_sq(fx["home"]))
-            + _similarita(nt, _norm_sq(fx["away"]))
-        )
-        if s > best_s:
-            best_s, best = s, fx
-
-    home_id = away_id = None
-    if best and best_s >= 0.60:
-        home_id, away_id = best.get("home_id"), best.get("away_id")
-
-    # Fallback: cerca team per nome se fixtures vuoti o match debole
-    def _team_id_by_name(nome: str):
+    def _team_id(nome: str):
+        # 1) match sui fixtures se ci sono
+        try:
+            for fx in _fixtures_api_football(div, api_key, giorno) or []:
+                if _similarita(_norm_sq(nome), _norm_sq(fx["home"])) >= 0.75:
+                    return fx.get("home_id")
+                if _similarita(_norm_sq(nome), _norm_sq(fx["away"])) >= 0.75:
+                    return fx.get("away_id")
+        except Exception:
+            pass
+        # 2) search API
         try:
             r = requests.get(
                 f"{API_FOOTBALL_BASE}/teams",
                 headers=headers,
-                params={"search": nome},
+                params={"search": str(nome)[:30]},
                 timeout=15,
             )
             if r.status_code != 200:
+                debug.append(f"teams {nome}: HTTP {r.status_code}")
                 return None
             resp = (r.json() or {}).get("response") or []
             if not resp:
+                debug.append(f"teams {nome}: vuoto")
                 return None
-            # scegli il più simile
             best_id, bs = None, 0.0
-            for item in resp[:8]:
+            for item in resp[:10]:
                 t = item.get("team") or {}
                 s = _similarita(_norm_sq(nome), _norm_sq(t.get("name") or ""))
                 if s > bs:
                     bs, best_id = s, t.get("id")
-            return best_id if bs >= 0.55 else None
-        except Exception:
+            if bs < 0.50:
+                debug.append(f"teams {nome}: sim={bs:.2f}")
+                return None
+            return best_id
+        except Exception as e:
+            debug.append(f"teams {nome}: {type(e).__name__}")
             return None
 
-    if not home_id:
-        home_id = _team_id_by_name(casa)
-    if not away_id:
-        away_id = _team_id_by_name(trasf)
-    if not home_id and not away_id:
-        return None
+    def _players(team_id: int):
+        vuoto = {"marcatori": [], "ammoniti": []}
+        if not team_id:
+            return vuoto
+        rows_g, rows_y = [], []
+        for seas in (season, season - 1, season - 2):
+            for params in (
+                {"team": team_id, "season": seas, "league": league_id, "page": 1},
+                {"team": team_id, "season": seas, "page": 1},
+            ):
+                try:
+                    r = requests.get(
+                        f"{API_FOOTBALL_BASE}/players",
+                        headers=headers,
+                        params=params,
+                        timeout=25,
+                    )
+                except Exception as e:
+                    debug.append(f"players: {type(e).__name__}")
+                    continue
+                if r.status_code != 200:
+                    debug.append(f"players HTTP {r.status_code}")
+                    continue
+                data = (r.json() or {}).get("response") or []
+                if not data:
+                    continue
+                for item in data:
+                    player = item.get("player") or {}
+                    nome = player.get("name") or ""
+                    if not nome:
+                        continue
+                    goals = yellows = minutes = 0
+                    for stt in (item.get("statistics") or []):
+                        try:
+                            goals += int((stt.get("goals") or {}).get("total") or 0)
+                        except (TypeError, ValueError):
+                            pass
+                        try:
+                            yellows += int((stt.get("cards") or {}).get("yellow") or 0)
+                        except (TypeError, ValueError):
+                            pass
+                        try:
+                            minutes += int((stt.get("games") or {}).get("minutes") or 0)
+                        except (TypeError, ValueError):
+                            pass
+                    if goals > 0:
+                        rows_g.append((nome, goals, minutes))
+                    if yellows > 0:
+                        rows_y.append((nome, yellows, minutes))
+                if rows_g or rows_y:
+                    break
+            if rows_g or rows_y:
+                break
 
-    # prova stagione corrente e precedente per stats
-    def _hints(tid):
-        if not tid:
-            return {"marcatori": [], "ammoniti": []}
-        for seas in (season, season - 1):
-            h = scarica_hint_giocatori(tid, league_id, seas, api_key)
-            if h["marcatori"] or h["ammoniti"]:
-                return h
-            # senza filtro league (stats totali stagione)
-            h2 = scarica_hint_giocatori(tid, 0, seas, api_key) if False else h
-            if h["marcatori"] or h["ammoniti"]:
-                return h
-        return {"marcatori": [], "ammoniti": []}
+        def _rank(rows):
+            def key(t):
+                _n, stat, mins = t
+                if mins and mins >= 90:
+                    return (stat / mins) * 90.0
+                return float(stat) * 0.5
+            # dedupe by name keeping best
+            best = {}
+            for n, st, mi in rows:
+                k = n.lower()
+                prev = best.get(k)
+                if prev is None or st > prev[1]:
+                    best[k] = (n, st, mi)
+            return sorted(best.values(), key=key, reverse=True)[:5]
 
-    # Se league_id con season non dà stats, riprova senza league (param opzionale)
-    def _hints_flex(tid):
-        if not tid:
-            return {"marcatori": [], "ammoniti": []}
-        for seas in (season, season - 1):
-            h = scarica_hint_giocatori(tid, league_id, seas, api_key)
-            if h["marcatori"] or h["ammoniti"]:
-                return h
-        # ultima chance: endpoint senza league (team+season only) — nuova cache key
-        for seas in (season, season - 1):
-            h = _scarica_hint_giocatori_no_league(tid, seas, api_key)
-            if h["marcatori"] or h["ammoniti"]:
-                return h
-        return {"marcatori": [], "ammoniti": []}
+        return {"marcatori": _rank(rows_g), "ammoniti": _rank(rows_y)}
 
+    hid, aid = _team_id(casa), _team_id(trasf)
+    if not hid and not aid:
+        return {
+            "home": casa, "away": trasf, "sim": 0.0,
+            "casa": {"marcatori": [], "ammoniti": []},
+            "trasf": {"marcatori": [], "ammoniti": []},
+            "debug": debug or ["nessun team id"],
+        }
     return {
-        "home": casa,
-        "away": trasf,
-        "sim": round(best_s, 2) if best else 0.0,
-        "casa": _hints_flex(home_id),
-        "trasf": _hints_flex(away_id),
+        "home": casa, "away": trasf, "sim": 0.0,
+        "casa": _players(hid),
+        "trasf": _players(aid),
+        "debug": debug,
     }
 
 
-@st.cache_data(ttl=12 * 3600, show_spinner=False)
-def _scarica_hint_giocatori_no_league(team_id: int, season: int, api_key: str):
-    """Come scarica_hint_giocatori ma senza filtro league (utile se la lega non matcha)."""
-    vuoto = {"marcatori": [], "ammoniti": []}
-    if not api_key or not team_id:
-        return vuoto
-    headers = _api_headers(api_key)
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def api_football_status(api_key: str) -> str:
+    """Ping /status per capire se la chiave funziona."""
+    if not api_key:
+        return "nessuna chiave"
     try:
         r = requests.get(
-            f"{API_FOOTBALL_BASE}/players",
-            headers=headers,
-            params={"team": int(team_id), "season": int(season), "page": 1},
-            timeout=25,
+            f"{API_FOOTBALL_BASE}/status",
+            headers=_api_headers(api_key),
+            timeout=15,
         )
         if r.status_code != 200:
-            return vuoto
-        data = (r.json() or {}).get("response") or []
-    except Exception:
-        return vuoto
-    marcatori, ammoniti = [], []
-    for item in data:
-        player = item.get("player") or {}
-        nome = player.get("name") or ""
-        if not nome:
-            continue
-        goals = yellows = minutes = 0
-        for stt in (item.get("statistics") or []):
-            g = (stt.get("goals") or {}).get("total")
-            y = (stt.get("cards") or {}).get("yellow")
-            m = (stt.get("games") or {}).get("minutes")
-            try:
-                goals += int(g or 0)
-            except (TypeError, ValueError):
-                pass
-            try:
-                yellows += int(y or 0)
-            except (TypeError, ValueError):
-                pass
-            try:
-                minutes += int(m or 0)
-            except (TypeError, ValueError):
-                pass
-        if goals > 0:
-            marcatori.append((nome, goals, minutes))
-        if yellows > 0:
-            ammoniti.append((nome, yellows, minutes))
-
-    def _rank(rows):
-        def key(t):
-            _n, stat, mins = t
-            if mins and mins >= 90:
-                return (stat / mins) * 90.0
-            return float(stat) * 0.5
-        return sorted(rows, key=key, reverse=True)[:5]
-
-    return {"marcatori": _rank(marcatori), "ammoniti": _rank(ammoniti)}
+            return f"HTTP {r.status_code}"
+        j = r.json() or {}
+        resp = j.get("response") or j
+        acc = resp.get("account") or {}
+        req = resp.get("requests") or {}
+        current = req.get("current")
+        limit = req.get("limit_day")
+        name = acc.get("firstname") or acc.get("name") or ""
+        if current is not None and limit is not None:
+            return f"OK {name} · req {current}/{limit} oggi"
+        return f"OK · risposta status ricevuta"
+    except Exception as e:
+        return f"errore {type(e).__name__}"
 
 
 def _match_quote_api(api_odds: dict, casa: str, trasf: str):
@@ -2330,6 +2340,8 @@ if xg_map:
 api_odds = {}
 _n_fix_af = 0
 if chiave_af:
+    _af_status = api_football_status(chiave_af)
+    st.sidebar.caption(f"API-Football status: {_af_status}")
     try:
         _n_fix_af = len(_fixtures_api_football(div, chiave_af, giorno) or [])
     except Exception:
@@ -2338,16 +2350,16 @@ if chiave_af:
     if api_odds:
         fonte_quote = "API-Football" if not quote_fixtures else "API-Football + fixtures.csv"
     else:
-        # messaggio diagnostico (non blocca l'app)
         if _n_fix_af == 0:
             st.sidebar.warning(
-                "API-Football: 0 fixtures per questa lega. "
-                "Controlla la chiave (api-sports o RapidAPI) o la stagione."
+                "API-Football: 0 fixtures. "
+                f"Status: {_af_status}. "
+                "Se non è OK, la chiave non è valida o le req sono finite."
             )
         else:
             st.sidebar.warning(
-                f"API-Football: {_n_fix_af} fixtures ma 0 quote parsate. "
-                "Quota giornaliera finita, o book senza 1X2 su queste partite."
+                f"API-Football: {_n_fix_af} fixtures ma 0 quote. "
+                "Partite troppo vicine / book senza 1X2, oppure quota finita."
             )
 
 _fonti.append(f"API quote {len(api_odds)}/{_n_fix_af if chiave_af else 0}")
@@ -2803,6 +2815,16 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
                         st.write(f"- {nome} — {gol} gol{extra}")
                 else:
                     st.caption("Nessun dato gol")
+            _dbg = hints.get("debug") or []
+            _empty = (
+                not hints["casa"]["marcatori"] and not hints["trasf"]["marcatori"]
+                and not hints["casa"]["ammoniti"] and not hints["trasf"]["ammoniti"]
+            )
+            if _empty:
+                st.caption(
+                    "Nessuna statistica giocatori dall'API. "
+                    + (f"Dettaglio: {'; '.join(_dbg[:3])}." if _dbg else "Verifica chiave API-Football e richieste residue.")
+                )
 
             st.markdown("#### Possibili ammoniti · indicativo")
             st.caption(
