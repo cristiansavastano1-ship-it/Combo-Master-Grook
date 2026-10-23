@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.19
+# Combo Master Grook — v4.20
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -65,7 +65,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.19</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.20</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -1040,9 +1040,9 @@ def scarica_hint_giocatori(team_id: int, league_id: int, season: int, api_key: s
 
 @st.cache_data(ttl=12 * 3600, show_spinner=False)
 def _squadra_attuale(team_id: int, api_key: str):
-    """Rosa corrente: /players/squads?team=ID → set di nomi normalizzati + id."""
+    """Rosa corrente → {norm: display_name}."""
     if not team_id or not api_key:
-        return {}, {}
+        return {}
     try:
         r = requests.get(
             f"{API_FOOTBALL_BASE}/players/squads",
@@ -1051,27 +1051,40 @@ def _squadra_attuale(team_id: int, api_key: str):
             timeout=20,
         )
         if r.status_code != 200:
-            return {}, {}
-        resp = (r.json() or {}).get("response") or []
-        by_norm, by_id = {}, {}
-        for block in resp:
+            return {}
+        out = {}
+        for block in (r.json() or {}).get("response") or []:
             for p in (block.get("players") or []):
-                nome = p.get("name") or ""
-                pid = p.get("id")
-                if not nome:
-                    continue
-                by_norm[_norm_sq(nome)] = nome
-                if pid:
-                    by_id[int(pid)] = nome
-        return by_norm, by_id
+                nome = (p.get("name") or "").strip()
+                if nome:
+                    out[_norm_sq(nome)] = nome
+        return out
     except Exception:
-        return {}, {}
+        return {}
+
+
+def _in_rosa(nome: str, rosa: dict) -> bool:
+    """Match flessibile rosa ↔ nome stats (cognome / sottostringa)."""
+    if not rosa:
+        return True  # niente rosa → non filtrare
+    nn = _norm_sq(nome)
+    if nn in rosa:
+        return True
+    parts = [p for p in nn.split() if len(p) > 2]
+    for rn, _disp in rosa.items():
+        if nn in rn or rn in nn:
+            return True
+        rparts = [p for p in rn.split() if len(p) > 2]
+        if parts and rparts and (set(parts) & set(rparts)):
+            return True
+    return False
 
 
 def hint_giocatori_partita(casa: str, trasf: str, div: str, api_key: str, giorno: str):
     """
-    Marcatori/ammoniti SOLO rosa attuale + stats stagione corrente (o -1 se vuota).
-    Filtra statistics[].team.id == team_id per evitare gol fatti in altre maglie.
+    Marcatori/ammoniti per Scheda.
+    1) ID squadra  2) rosa attuale (opzionale)  3) stats stagione con quella maglia
+    Se il filtro rosa azzera tutto, mostra stats maglia senza filtro (con avviso).
     """
     if not api_key or div not in API_FOOTBALL_LEAGUE_ID:
         return None
@@ -1097,37 +1110,31 @@ def hint_giocatori_partita(casa: str, trasf: str, div: str, api_key: str, giorno
                 timeout=15,
             )
             if r.status_code != 200:
-                debug.append(f"teams {nome}: HTTP {r.status_code}")
+                debug.append(f"teams HTTP {r.status_code}")
                 return None
-            resp = (r.json() or {}).get("response") or []
             best_id, bs = None, 0.0
-            for item in resp[:12]:
+            for item in (r.json() or {}).get("response") or []:
                 t = item.get("team") or {}
-                # preferisci squadre del paese della lega se disponibile
                 s = _similarita(_norm_sq(nome), _norm_sq(t.get("name") or ""))
                 if s > bs:
                     bs, best_id = s, t.get("id")
             return best_id if bs >= 0.55 else None
         except Exception as e:
-            debug.append(f"teams {nome}: {type(e).__name__}")
+            debug.append(type(e).__name__)
             return None
 
-    def _stats_rosa(team_id: int):
+    def _collect(team_id: int):
         vuoto = {"marcatori": [], "ammoniti": []}
         if not team_id:
-            return vuoto, None
-        rosa_norm, rosa_ids = _squadra_attuale(team_id, api_key)
-        if not rosa_norm and not rosa_ids:
-            debug.append(f"squad team={team_id} vuota")
+            return vuoto, None, False
+        rosa = _squadra_attuale(team_id, api_key)
         season_used = None
-        rows_g, rows_y = [], []
+        raw_g, raw_y = [], []
 
-        # Solo stagione corrente; se zero dati, UNA stagione indietro (etichettata)
         for seas in (season, season - 1):
-            got = False
             for params in (
-                {"team": team_id, "season": seas, "league": league_id, "page": 1},
-                {"team": team_id, "season": seas, "page": 1},
+                {"team": int(team_id), "season": int(seas), "league": int(league_id), "page": 1},
+                {"team": int(team_id), "season": int(seas), "page": 1},
             ):
                 try:
                     r = requests.get(
@@ -1139,13 +1146,12 @@ def hint_giocatori_partita(casa: str, trasf: str, div: str, api_key: str, giorno
                 except Exception:
                     continue
                 if r.status_code != 200:
+                    debug.append(f"players HTTP {r.status_code}")
                     continue
-                data = (r.json() or {}).get("response") or []
-                # pagina 2 se serve
-                paging = (r.json() or {}).get("paging") or {}
-                pages = int(paging.get("total") or 1)
-                all_data = list(data)
-                if pages >= 2:
+                body = r.json() or {}
+                data = list(body.get("response") or [])
+                total_pages = int((body.get("paging") or {}).get("total") or 1)
+                if total_pages >= 2:
                     try:
                         r2 = requests.get(
                             f"{API_FOOTBALL_BASE}/players",
@@ -1154,39 +1160,21 @@ def hint_giocatori_partita(casa: str, trasf: str, div: str, api_key: str, giorno
                             timeout=25,
                         )
                         if r2.status_code == 200:
-                            all_data.extend((r2.json() or {}).get("response") or [])
+                            data.extend((r2.json() or {}).get("response") or [])
                     except Exception:
                         pass
 
-                for item in all_data:
+                for item in data:
                     player = item.get("player") or {}
-                    nome = player.get("name") or ""
-                    pid = player.get("id")
+                    nome = (player.get("name") or "").strip()
                     if not nome:
                         continue
-                    # filtro rosa attuale se disponibile
-                    if rosa_norm or rosa_ids:
-                        ok = False
-                        if pid and int(pid) in rosa_ids:
-                            ok = True
-                        elif _norm_sq(nome) in rosa_norm:
-                            ok = True
-                        else:
-                            # match parziale sul cognome
-                            for rn in rosa_norm:
-                                if rn and (rn in _norm_sq(nome) or _norm_sq(nome) in rn):
-                                    ok = True
-                                    break
-                        if not ok:
-                            continue
-
                     goals = yellows = minutes = 0
                     for stt in (item.get("statistics") or []):
-                        # solo stats con questa maglia
-                        tid = ((stt.get("team") or {}).get("id"))
+                        tid = (stt.get("team") or {}).get("id")
+                        # se l'API indica un'altra squadra, salta
                         if tid is not None and int(tid) != int(team_id):
                             continue
-                        # lega: se presente e diversa, salta (evita coppe vecchie mischiate se possibile)
                         try:
                             goals += int((stt.get("goals") or {}).get("total") or 0)
                         except (TypeError, ValueError):
@@ -1200,14 +1188,13 @@ def hint_giocatori_partita(casa: str, trasf: str, div: str, api_key: str, giorno
                         except (TypeError, ValueError):
                             pass
                     if goals > 0:
-                        rows_g.append((nome, goals, minutes))
+                        raw_g.append((nome, goals, minutes))
                     if yellows > 0:
-                        rows_y.append((nome, yellows, minutes))
-                if rows_g or rows_y:
-                    got = True
+                        raw_y.append((nome, yellows, minutes))
+                if raw_g or raw_y:
                     season_used = seas
                     break
-            if got:
+            if raw_g or raw_y:
                 break
 
         def _rank(rows):
@@ -1223,22 +1210,35 @@ def hint_giocatori_partita(casa: str, trasf: str, div: str, api_key: str, giorno
                     best[k] = (n, st, mi)
             return sorted(best.values(), key=key, reverse=True)[:5]
 
-        # Se abbiamo rosa ma zero stats, elenca almeno i nomi rosa (senza numeri) → no, meglio vuoto
-        return {"marcatori": _rank(rows_g), "ammoniti": _rank(rows_y)}, season_used
+        # applica rosa se possibile
+        filt_g = [t for t in raw_g if _in_rosa(t[0], rosa)]
+        filt_y = [t for t in raw_y if _in_rosa(t[0], rosa)]
+        used_rosa = bool(rosa)
+        if rosa and not filt_g and not filt_y and (raw_g or raw_y):
+            # nomi rosa non allineati → meglio mostrare stats maglia che restare vuoti
+            filt_g, filt_y = raw_g, raw_y
+            used_rosa = False
+            debug.append("rosa non allineata, stats senza filtro nomi")
+
+        return (
+            {"marcatori": _rank(filt_g), "ammoniti": _rank(filt_y)},
+            season_used,
+            used_rosa,
+        )
 
     hid, aid = _team_id(casa), _team_id(trasf)
-    hc, sc = _stats_rosa(hid) if hid else ({"marcatori": [], "ammoniti": []}, None)
-    ac, sa = _stats_rosa(aid) if aid else ({"marcatori": [], "ammoniti": []}, None)
+    hc, sc, ur_c = _collect(hid) if hid else ({"marcatori": [], "ammoniti": []}, None, False)
+    ac, sa, ur_a = _collect(aid) if aid else ({"marcatori": [], "ammoniti": []}, None, False)
     seasons = [s for s in (sc, sa) if s is not None]
     return {
         "home": casa,
         "away": trasf,
-        "sim": 0.0,
         "casa": hc,
         "trasf": ac,
         "debug": debug,
         "season_used": seasons[0] if seasons else None,
         "season_corrente": season,
+        "rosa_filtrata": ur_c or ur_a,
     }
 
 
@@ -2872,12 +2872,15 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
             _sc = hints.get("season_corrente")
             _note = ""
             if _su and _sc and _su < _sc:
-                _note = f" Attenzione: stats stagione {_su}/{_su+1} (rosa filtrata; corrente ancora scarsa)."
+                _note = f" Stats stagione {_su}/{_su+1} (corrente ancora incompleta)."
             elif _su:
-                _note = f" Stagione stats: {_su}/{_su+1}."
+                _note = f" Stagione {_su}/{_su+1}."
+            if hints.get("rosa_filtrata"):
+                _note += " Filtro rosa attuale attivo."
+            else:
+                _note += " Gol/gialli con questa maglia (rosa API non allineata o assente)."
             st.caption(
-                "Solo giocatori in rosa attuale + gol/gialli fatti con questa maglia. "
-                "Non è un ranking di quote anytime scorer."
+                "Indicativo, non quote anytime scorer."
                 + _note
             )
             c1, c2 = st.columns(2)
