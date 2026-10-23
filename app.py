@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.22
+# Combo Master Grook — v4.23
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -24,18 +24,21 @@ st.set_page_config(
     page_title="Combo Master Grook",
     layout="wide",
     page_icon="⚽",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
 # --- DESIGN ---
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+    /* niente Google Fonts: su iOS a volte blocca il caricamento */
+    html, body, [class*="css"] {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
     #MainMenu, footer { visibility: hidden; }
-    /* header visibile: su iOS serve per aprire la sidebar */
     .stApp { background-color: #0b0f19; color: #f3f4f6; }
+    /* evita overflow orizzontale su iPhone */
+    .stApp, .block-container { overflow-x: hidden; }
     .block-container {
         padding-top: 1.2rem; padding-bottom: 3rem;
         max-width: 1280px;
@@ -105,7 +108,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.22</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.23</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -357,7 +360,7 @@ def senza_margine(quote):
 # ======================= CARICAMENTO DATI =======================
 def _leggi_csv(url: str):
     try:
-        res = requests.get(url, timeout=20, headers=UA)
+        res = requests.get(url, timeout=15, headers=UA)
     except Exception as e:
         return None, f"connessione fallita ({type(e).__name__})"
     if res.status_code != 200:
@@ -471,7 +474,7 @@ def carica_storico_europeo(div: str, n_stagioni: int, giorno: str, chiave: str):
         slug = f"{y}-{str(y+1)[2:]}"
         url = f"https://raw.githubusercontent.com/openfootball/champions-league/master/{slug}/{file_name}"
         try:
-            res = requests.get(url, timeout=25, headers=UA)
+            res = requests.get(url, timeout=18, headers=UA)
             if res.status_code != 200 or len(res.text) < 200:
                 continue
             d = _parse_openfootball_txt(res.text, y)
@@ -490,7 +493,7 @@ def carica_storico_europeo(div: str, n_stagioni: int, giorno: str, chiave: str):
                     f"https://api.football-data.org/v4/competitions/{codice}/matches",
                     headers={"X-Auth-Token": chiave},
                     params={"season": y, "status": "FINISHED"},
-                    timeout=25,
+                    timeout=18,
                 )
                 if res.status_code != 200:
                     continue
@@ -915,7 +918,7 @@ def _fixtures_api_football(div: str, api_key: str, giorno: str):
                 f"{API_FOOTBALL_BASE}/fixtures",
                 headers=headers,
                 params=params,
-                timeout=25,
+                timeout=18,
             )
         except Exception:
             continue
@@ -1027,7 +1030,7 @@ def scarica_hint_giocatori(team_id: int, league_id: int, season: int, api_key: s
                 "league": int(league_id),
                 "page": 1,
             },
-            timeout=25,
+            timeout=18,
         )
         if r.status_code != 200:
             return vuoto
@@ -1088,7 +1091,7 @@ def _squadra_attuale(team_id: int, api_key: str):
             f"{API_FOOTBALL_BASE}/players/squads",
             headers=_api_headers(api_key),
             params={"team": int(team_id)},
-            timeout=20,
+            timeout=15,
         )
         if r.status_code != 200:
             return {}
@@ -1181,7 +1184,7 @@ def hint_giocatori_partita(casa: str, trasf: str, div: str, api_key: str, giorno
                         f"{API_FOOTBALL_BASE}/players",
                         headers=headers,
                         params=params,
-                        timeout=25,
+                        timeout=18,
                     )
                 except Exception:
                     continue
@@ -1197,7 +1200,7 @@ def hint_giocatori_partita(casa: str, trasf: str, div: str, api_key: str, giorno
                             f"{API_FOOTBALL_BASE}/players",
                             headers=headers,
                             params={**params, "page": 2},
-                            timeout=25,
+                            timeout=18,
                         )
                         if r2.status_code == 200:
                             data.extend((r2.json() or {}).get("response") or [])
@@ -2429,8 +2432,9 @@ st.sidebar.caption(
     "Cache 6h quote · 12h giocatori. Apri poche leghe al giorno."
 )
 st.sidebar.info(
-    "📱 **iPhone/iPad:** se non vedi questa colonna, tocca la freccia in alto a sinistra "
-    "(o l’icona `>` sul bordo) per aprire **Configurazione** e inserire le chiavi."
+    "📱 **iPhone/iPad:** tocca la freccia in alto a sinistra per le chiavi. "
+    "Se la pagina resta bianca: chiudi Safari, riapri il link, oppure usa Chrome. "
+    "Wi‑Fi consigliato al primo caricamento."
 )
 st.sidebar.markdown("---")
 st.sidebar.info(
