@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.21
+# Combo Master Grook — v4.22
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -34,27 +34,66 @@ st.markdown(
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     #MainMenu, footer { visibility: hidden; }
+    /* header visibile: su iOS serve per aprire la sidebar */
     .stApp { background-color: #0b0f19; color: #f3f4f6; }
-    .block-container { padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1280px; }
-    [data-testid="stSidebar"] { background-color: #111827; border-right: 1px solid #1f2937; }
+    .block-container {
+        padding-top: 1.2rem; padding-bottom: 3rem;
+        max-width: 1280px;
+        padding-left: 1rem; padding-right: 1rem;
+    }
+    [data-testid="stSidebar"] {
+        background-color: #111827;
+        border-right: 1px solid #1f2937;
+    }
     .stButton>button {
         background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
         color: white; border: none; border-radius: 10px; font-weight: 600;
-        padding: 0.5rem 1rem; transition: all 0.25s ease;
+        padding: 0.55rem 1rem; transition: all 0.25s ease;
         box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        min-height: 2.6rem;
     }
     .stButton>button:hover {
         background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
         box-shadow: 0 6px 16px rgba(59, 130, 246, 0.5);
-        transform: translateY(-1px);
     }
     [data-testid="stMetric"] {
         background-color: #111827; border: 1px solid #1f2937;
-        padding: 15px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        padding: 12px; border-radius: 12px;
     }
+    [data-testid="stMetricLabel"] { color: #9ca3af !important; }
     [data-testid="stMetricValue"] { color: #38bdf8 !important; font-weight: 700 !important; }
     div[data-testid="stTabs"] button { font-weight: 600; }
+
+    /* —— iPhone / iPad —— */
+    @media (max-width: 768px) {
+        .block-container {
+            padding-top: 0.6rem;
+            padding-left: 0.6rem;
+            padding-right: 0.6rem;
+            max-width: 100%;
+        }
+        [data-testid="stMetric"] { padding: 10px; margin-bottom: 6px; }
+        [data-testid="stMetricValue"] { font-size: 1.15rem !important; }
+        .stButton>button {
+            width: 100%;
+            min-height: 2.8rem;
+            font-size: 0.95rem;
+        }
+        /* colonne più leggibili in verticale */
+        [data-testid="column"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
+        }
+        h1, h2, h3 { line-height: 1.25; }
+        p, li, .stCaption { font-size: 0.92rem; }
+    }
+    @media (max-width: 480px) {
+        [data-testid="stMetricValue"] { font-size: 1.05rem !important; }
+        div[data-testid="stTabs"] button { font-size: 0.8rem; padding: 0.35rem 0.5rem; }
+    }
     </style>
+
     """,
     unsafe_allow_html=True,
 )
@@ -66,7 +105,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.21</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.22</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -1243,7 +1282,7 @@ def hint_giocatori_partita(casa: str, trasf: str, div: str, api_key: str, giorno
     }
 
 
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def api_football_status(api_key: str) -> str:
     """Ping /status per capire se la chiave funziona."""
     if not api_key:
@@ -1257,17 +1296,29 @@ def api_football_status(api_key: str) -> str:
         if r.status_code != 200:
             return f"HTTP {r.status_code}"
         j = r.json() or {}
-        resp = j.get("response") or j
+        resp = j.get("response") if isinstance(j.get("response"), dict) else j
+        if not isinstance(resp, dict):
+            resp = {}
         acc = resp.get("account") or {}
         req = resp.get("requests") or {}
         current = req.get("current")
-        limit = req.get("limit_day")
+        limit = req.get("limit_day") or req.get("limit_day") 
+        # alcuni account espongono subscription
+        sub = resp.get("subscription") or {}
+        if current is None:
+            current = req.get("current") or sub.get("requests_current")
+        if limit is None:
+            limit = req.get("limit_day") or sub.get("requests_limit")
         name = acc.get("firstname") or acc.get("name") or ""
         if current is not None and limit is not None:
             return f"OK {name} · req {current}/{limit} oggi"
-        return f"OK · risposta status ricevuta"
+        # fallback: mostra pezzi utili se presenti
+        if req:
+            return f"OK · requests={req}"
+        return "OK · chiave accettata"
     except Exception as e:
         return f"errore {type(e).__name__}"
+
 
 
 def _match_quote_api(api_odds: dict, casa: str, trasf: str):
@@ -2376,6 +2427,10 @@ chiave_af = st.sidebar.text_input(
 st.sidebar.caption(
     "Quote 1X2 e O/U pre-match (anche CL/EL). Free = 100 req/giorno. "
     "Cache 6h quote · 12h giocatori. Apri poche leghe al giorno."
+)
+st.sidebar.info(
+    "📱 **iPhone/iPad:** se non vedi questa colonna, tocca la freccia in alto a sinistra "
+    "(o l’icona `>` sul bordo) per aprire **Configurazione** e inserire le chiavi."
 )
 st.sidebar.markdown("---")
 st.sidebar.info(
