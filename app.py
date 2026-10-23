@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.20
+# Combo Master Grook — v4.21
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -24,6 +24,7 @@ st.set_page_config(
     page_title="Combo Master Grook",
     layout="wide",
     page_icon="⚽",
+    initial_sidebar_state="expanded",
 )
 
 # --- DESIGN ---
@@ -32,7 +33,7 @@ st.markdown(
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-    #MainMenu, footer, header { visibility: hidden; }
+    #MainMenu, footer { visibility: hidden; }
     .stApp { background-color: #0b0f19; color: #f3f4f6; }
     .block-container { padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1280px; }
     [data-testid="stSidebar"] { background-color: #111827; border-right: 1px solid #1f2937; }
@@ -65,7 +66,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.20</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.21</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
