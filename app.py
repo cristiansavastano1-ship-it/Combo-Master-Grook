@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.24
+# Combo Master Grook — v4.25
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -91,6 +91,11 @@ st.markdown(
         h1, h2, h3 { line-height: 1.25; }
         p, li, .stCaption { font-size: 0.92rem; }
     }
+    /* scheda compatta mobile */
+    @media (max-width: 768px) {
+        div[data-testid="stVerticalBlockBorderWrapper"] { margin-bottom: 0.4rem; }
+        .stMarkdown h3, .stMarkdown h4 { margin-top: 0.6rem; margin-bottom: 0.3rem; }
+    }
     @media (max-width: 480px) {
         [data-testid="stMetricValue"] { font-size: 1.05rem !important; }
         div[data-testid="stTabs"] button { font-size: 0.8rem; padding: 0.35rem 0.5rem; }
@@ -108,7 +113,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.24</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.25</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -162,6 +167,20 @@ FORM_N = 6              # ultime N partite per la forma
 FORM_BLEND = 0.25       # peso forma recente sui λ (0=off)
 XG_BLEND = 0.20         # peso Understat xG, fisso (niente slider)
 UNDERSTAT_PATHS = ("data/understat_xg.csv", "understat_xg.csv")
+
+def _mtime_csv_label(*rels) -> str:
+    """Data ultima modifica del primo CSV trovato (per sidebar)."""
+    for rel in rels:
+        for fp in (Path(rel), Path.cwd() / rel):
+            try:
+                if fp.is_file() and fp.stat().st_size > 20:
+                    ts = pd.Timestamp(fp.stat().st_mtime, unit="s")
+                    return ts.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                continue
+    return "non trovato"
+
+
 UA = {"User-Agent": "Mozilla/5.0 (compatible; ComboMasterGrook/4.9)"}
 N_STAGIONI = 3
 N_STAGIONI_TEST = 5
@@ -2404,6 +2423,12 @@ form_map = forma_recente(df_storico, FORM_N)
 df_xg = carica_understat_csv(giorno)
 xg_map = mappa_understat(modello["squadre"], df_xg)
 
+_clubelo_upd = _mtime_csv_label("data/clubelo.csv", "clubelo.csv")
+_under_upd = _mtime_csv_label("data/understat_xg.csv", "understat_xg.csv")
+st.sidebar.caption(f"📁 ClubElo CSV: {_clubelo_upd}")
+st.sidebar.caption(f"📁 Understat CSV: {_under_upd}")
+st.sidebar.caption("CSV: Action GitHub ogni lunedì 06:00 UTC (o Run workflow).")
+
 _fonti = ["football-data.co.uk", f"ClubElo {len(elo_map)}/{len(modello['squadre'])}"]
 _fonti.append(f"Forma U{FORM_N} ({len(form_map)} sq)")
 if xg_map:
@@ -2679,9 +2704,14 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
     st.markdown(f"<h3>🔬 Poisson / Dixon-Coles · {casa} vs {trasf}</h3>", unsafe_allow_html=True)
     st.caption(f"Fonte Goal / Over / Esatti: {d['fonte']}.")
     if not d["ancorata"]:
-        st.error(
-            "🚫 **Niente scommesse consigliate** su questa partita: mancano le quote bookmaker. "
-            "Le % sotto sono solo indicative (modello + forma/Elo). Non usarle come value bet."
+        st.warning(
+            "⚠️ **Senza quote book → solo modello.** "
+            "Le % sotto sono Dixon-Coles + forma/Elo/xG (eventualmente calibrate). "
+            "Non usarle come value bet: manca l’ancoraggio al bookmaker."
+        )
+    else:
+        st.success(
+            "✅ **Con quote book** (senza margine): 1X2 ancorato al mercato."
         )
     a1, a2, a3 = st.columns(3)
     a1.metric("1 (Casa)", f"{mk['p1']*100:.1f}%", f"Equa: {1/mk['p1']:.2f}")
@@ -2867,72 +2897,48 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
         except Exception as _e_hint:
             st.caption(f"Hint giocatori non disponibili ({type(_e_hint).__name__}).")
         if hints:
-            st.markdown("#### Possibili marcatori · indicativo")
-            _su = hints.get("season_used")
-            _note = ""
-            if _su:
-                _note = f" Stagione {_su}/{_su+1}."
-            _note += " Fonte: classifica marcatori/ammoniti di lega (gratis, 1–2 req)."
-            st.caption("Indicativo · top lega filtrati per squadra, non quote book." + _note)
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown(f"**{casa}**")
-                rows = hints["casa"]["marcatori"]
-                if rows:
-                    for nome, gol, mins in rows:
-                        extra = f" · {mins}'" if mins else ""
-                        st.write(f"- {nome} — {gol} gol{extra}")
-                else:
-                    st.caption("Nessun dato gol")
-            with c2:
-                st.markdown(f"**{trasf}**")
-                rows = hints["trasf"]["marcatori"]
-                if rows:
-                    for nome, gol, mins in rows:
-                        extra = f" · {mins}'" if mins else ""
-                        st.write(f"- {nome} — {gol} gol{extra}")
-                else:
-                    st.caption("Nessun dato gol")
-            _dbg = hints.get("debug") or []
-            _empty = (
-                not hints["casa"]["marcatori"] and not hints["trasf"]["marcatori"]
-                and not hints["casa"]["ammoniti"] and not hints["trasf"]["ammoniti"]
-            )
-            if _empty:
-                st.caption(
-                    "Nessuna statistica giocatori dall'API. "
-                    + (f"Dettaglio: {'; '.join(_dbg[:3])}." if _dbg else "Verifica chiave API-Football e richieste residue.")
-                )
-
-            st.markdown("#### Possibili ammoniti · indicativo")
-            st.caption(
-                "Ordine per gialli/90 (o gialli grezzi se pochi minuti). "
-                "Senza storico arbitro: solo tendenza disciplinare."
-            )
-            c3, c4 = st.columns(2)
-            with c3:
-                st.markdown(f"**{casa}**")
-                rows = hints["casa"]["ammoniti"]
-                if rows:
-                    for nome, y, mins in rows:
-                        extra = f" · {mins}'" if mins else ""
-                        st.write(f"- {nome} — {y} gialli{extra}")
-                else:
-                    st.caption("Nessun dato gialli")
-            with c4:
-                st.markdown(f"**{trasf}**")
-                rows = hints["trasf"]["ammoniti"]
-                if rows:
-                    for nome, y, mins in rows:
-                        extra = f" · {mins}'" if mins else ""
-                        st.write(f"- {nome} — {y} gialli{extra}")
-                else:
-                    st.caption("Nessun dato gialli")
-        else:
-            st.caption(
-                "Hint giocatori non disponibili: partita non trovata nei fixtures API, "
-                "nomi non abbinati, o quota API-Football esaurita (100 req/giorno)."
-            )
+            has_g = bool(hints["casa"]["marcatori"] or hints["trasf"]["marcatori"])
+            has_y = bool(hints["casa"]["ammoniti"] or hints["trasf"]["ammoniti"])
+            if has_g or has_y:
+                if has_g:
+                    st.markdown("#### Possibili marcatori · indicativo")
+                    _su = hints.get("season_used")
+                    _note = f" Stagione {_su}/{_su+1}." if _su else ""
+                    st.caption("Top lega filtrati per squadra (gratis). Non sono quote anytime." + _note)
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.markdown(f"**{casa}**")
+                        for nome, gol, mins in hints["casa"]["marcatori"]:
+                            extra = f" · {mins}'" if mins else ""
+                            st.write(f"- {nome} — {gol} gol{extra}")
+                        if not hints["casa"]["marcatori"]:
+                            st.caption("—")
+                    with c2:
+                        st.markdown(f"**{trasf}**")
+                        for nome, gol, mins in hints["trasf"]["marcatori"]:
+                            extra = f" · {mins}'" if mins else ""
+                            st.write(f"- {nome} — {gol} gol{extra}")
+                        if not hints["trasf"]["marcatori"]:
+                            st.caption("—")
+                if has_y:
+                    st.markdown("#### Possibili ammoniti · indicativo")
+                    st.caption("Tendenza disciplinare (gialli stagione). Senza storico arbitro.")
+                    c3, c4 = st.columns(2)
+                    with c3:
+                        st.markdown(f"**{casa}**")
+                        for nome, y, mins in hints["casa"]["ammoniti"]:
+                            extra = f" · {mins}'" if mins else ""
+                            st.write(f"- {nome} — {y} gialli{extra}")
+                        if not hints["casa"]["ammoniti"]:
+                            st.caption("—")
+                    with c4:
+                        st.markdown(f"**{trasf}**")
+                        for nome, y, mins in hints["trasf"]["ammoniti"]:
+                            extra = f" · {mins}'" if mins else ""
+                            st.write(f"- {nome} — {y} gialli{extra}")
+                        if not hints["trasf"]["ammoniti"]:
+                            st.caption("—")
+            # se vuoti: non mostrare nulla (niente "Nessun dato")
 
     if d["ancorata"]:
         st.caption("Con quote reali le probabilità 1X2 coincidono col mercato (senza margine): non c'è edge automatico sul 1X2.")
@@ -2961,14 +2967,14 @@ with tab_calendario:
             key="cal_giornata",
         )
         block = calendario[calendario["Giornata"] == giornata_sel].reset_index(drop=True)
-        st.markdown(f"**{len(block)} partite** · clicca **Scheda** per dettagli, multigol e ritardi")
+        st.markdown(f"**{len(block)} partite** · in lista: **segno + % + Over** · **Scheda** per il resto")
+        st.caption("Badge **con quote** = 1X2 ancorato al book. **modello** = solo Dixon-Coles + prior.")
 
         for idx, row in block.iterrows():
             casa, trasf = row["Casa"], row["Trasferta"]
             gc = row["GolC"] if pd.notna(row["GolC"]) else None
             gt = row["GolT"] if pd.notna(row["GolT"]) else None
             finita = row.get("Stato") == "FINISHED" and gc is not None
-            # % rapide modello
             try:
                 d_r = distribuzione(casa, trasf)
                 syn = applica_affidabilita(sintesi_pronostico(d_r["M_1x2"]), cal, d_r["ancorata"])
@@ -2976,7 +2982,7 @@ with tab_calendario:
             except Exception:
                 syn, d_r, gh, ga = None, None, None, None
 
-            c_left, c_mid, c_btn = st.columns([2.2, 3.6, 0.8])
+            c_left, c_mid, c_btn = st.columns([2.0, 3.8, 0.9])
             with c_left:
                 if finita:
                     st.markdown(f"**{casa}** {int(gc)}-{int(gt)} **{trasf}**")
@@ -2986,16 +2992,14 @@ with tab_calendario:
                     st.caption(f"{row['Data']} · {row['Ora']}")
             with c_mid:
                 if syn:
-                    fonte = "quote" if d_r and d_r["ancorata"] else ("calibrato" if syn.get("calib") else "modello")
-                    st.caption(
-                        f"Pron. **{syn['segno']}** ({fonte}) · DC **{syn['dc']}** {syn['dc_p']*100:.0f}% · "
-                        f"{syn['combo']} {syn['combo_p']*100:.0f}% · {syn['ou']} {syn['ou_p']*100:.0f}% · MG **{syn['mg']}**"
+                    con_quote = bool(d_r and d_r.get("ancorata"))
+                    badge = "🟢 con quote" if con_quote else "🔵 modello"
+                    st.markdown(
+                        f"{badge} · **{syn['segno']}** "
+                        f"· 1 `{syn['p1']*100:.0f}%` · X `{syn['px']*100:.0f}%` · 2 `{syn['p2']*100:.0f}%` "
+                        f"· **{syn['ou']}** `{syn['ou_p']*100:.0f}%`"
                     )
-                    st.caption(
-                        f"1 {syn['p1']*100:.0f}% · X {syn['px']*100:.0f}% · 2 {syn['p2']*100:.0f}%"
-                        f"  ·  gol attesi {gh:.2f}-{ga:.2f}"
-                        f"  ·  MG casa {syn['mg_casa']} · osp {syn['mg_osp']}"
-                    )
+                    st.caption(f"gol attesi {gh:.2f}–{ga:.2f} · dettagli in Scheda")
                 else:
                     st.caption("Probabilità non calcolabili")
             with c_btn:
