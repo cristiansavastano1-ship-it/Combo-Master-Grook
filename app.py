@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.26
+# Combo Master Grook — v4.27
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -113,7 +113,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.26</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.27</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -130,16 +130,26 @@ LEAGUES = {
     "Premier League (Inghilterra)": "E0",
     "Championship (Inghilterra)": "E1",
     "La Liga (Spagna)": "SP1",
+    "La Liga 2 (Spagna)": "SP2",
     "Bundesliga (Germania)": "D1",
+    "2. Bundesliga (Germania)": "D2",
     "Ligue 1 (Francia)": "F1",
+    "Ligue 2 (Francia)": "F2",
     "Eredivisie (Olanda)": "N1",
+    "Primeira Liga (Portogallo)": "P1",
+    "Pro League (Belgio)": "B1",
+    "Super Lig (Turchia)": "T1",
+    "Premiership (Scozia)": "SC0",
+    "Super League (Grecia)": "G1",
     "Champions League (UEFA)": "CL",
     "Europa League (UEFA)": "EL",
 }
-# football-data.org competition codes
+# football-data.org competition codes (calendario; free tier limitato → fallback CSV)
 API_CODICI = {
     "I1": "SA", "I2": "SB", "E0": "PL", "E1": "ELC",
-    "SP1": "PD", "D1": "BL1", "F1": "FL1", "N1": "DED",
+    "SP1": "PD", "SP2": "SD", "D1": "BL1", "D2": "BL2",
+    "F1": "FL1", "F2": "FL2", "N1": "DED",
+    "P1": "PPL", "B1": "BJL", "T1": "TSL", "SC0": "SPL", "G1": "GSL",
     "CL": "CL", "EL": "EL",
 }
 # Divisione europee: niente CSV su football-data.co.uk → storico da football-data.org
@@ -151,9 +161,17 @@ API_FOOTBALL_LEAGUE_ID = {
     "E0": 39,    # Premier League
     "E1": 40,    # Championship
     "SP1": 140,  # La Liga
+    "SP2": 141,  # La Liga 2 (Segunda)
     "D1": 78,    # Bundesliga
+    "D2": 79,    # 2. Bundesliga
     "F1": 61,    # Ligue 1
+    "F2": 62,    # Ligue 2
     "N1": 88,    # Eredivisie
+    "P1": 94,    # Primeira Liga
+    "B1": 144,   # Belgium Pro League
+    "T1": 203,   # Super Lig
+    "SC0": 179,  # Scottish Premiership
+    "G1": 197,   # Super League Greece
     "CL": 2,     # UEFA Champions League
     "EL": 3,     # UEFA Europa League
 }
