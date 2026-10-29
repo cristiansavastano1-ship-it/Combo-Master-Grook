@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.27
+# Combo Master Grook — v4.28
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -113,7 +113,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.27</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.28</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -966,7 +966,7 @@ def _fixtures_api_football(div: str, api_key: str, giorno: str):
     attempts = []
     for seas in (season, season - 1, season + 1):
         attempts.extend([
-            {"league": league_id, "season": seas, "next": 20},
+            {"league": league_id, "season": seas, "next": 30},
             {"league": league_id, "season": seas, "from": d0, "to": d1},
             {"league": league_id, "season": seas, "from": d_yest, "to": d1},
             {"league": league_id, "season": seas, "last": 5},  # almeno qualcosa di recente
@@ -1365,6 +1365,12 @@ def assegna_giornate(righe):
 
 
 def costruisci_calendario(div, df_storico, fx, chiave, squadre_modello, af_key: str = "", giorno: str = ""):
+    """
+    Priorità calendario futuro:
+    1) football-data.org (solo leghe del piano free)
+    2) API-Football next fixtures (tutte le leghe con ID, 1 req cache)
+    3) storico CSV + fixtures.csv (prossimo turno se presente)
+    """
     dati = scarica_calendario_api(chiave, API_CODICI.get(div, "")) if chiave else None
     if dati and dati.get("matches"):
         nomi = {m["homeTeam"]["name"] for m in dati["matches"]} | {m["awayTeam"]["name"] for m in dati["matches"]}
@@ -1377,6 +1383,7 @@ def costruisci_calendario(div, df_storico, fx, chiave, squadre_modello, af_key: 
                 continue
             ft = (m.get("score") or {}).get("fullTime") or {}
             ts = pd.to_datetime(m["utcDate"], utc=True).tz_convert("Europe/Rome")
+            stato = m.get("status", "")
             righe.append({
                 "Giornata": m.get("matchday") or 0,
                 "Data": ts.strftime("%Y-%m-%d"),
@@ -1385,31 +1392,69 @@ def costruisci_calendario(div, df_storico, fx, chiave, squadre_modello, af_key: 
                 "Trasferta": mp.get(a, a),
                 "GolC": ft.get("home"),
                 "GolT": ft.get("away"),
-                "Stato": m.get("status", ""),
+                "Stato": stato,
             })
-        return pd.DataFrame(righe), "football-data.org (calendario completo)"
+        # se l'API ha almeno una non finita, usala
+        if any(r["Stato"] not in ("FINISHED", "AWARDED") for r in righe):
+            return pd.DataFrame(righe), "football-data.org (calendario completo)"
+        # altrimenti continua: magari solo storico
 
-    # CL/EL: calendario da API-Football se openfootball non ha la stagione corrente (es. EL 2025-26 assente)
-    if div in ("CL", "EL") and af_key:
+    # API-Football: tutte le leghe mappate (non solo CL/EL)
+    if af_key and div in API_FOOTBALL_LEAGUE_ID:
         try:
             g = giorno or date.today().isoformat()
             fxs = _fixtures_api_football(div, af_key, g)
             if fxs:
-                mp = mappa_nomi({f["home"] for f in fxs} | {f["away"] for f in fxs}, squadre_modello)
+                mp = mappa_nomi(
+                    {f["home"] for f in fxs} | {f["away"] for f in fxs},
+                    squadre_modello,
+                )
+                # unisci con storico stagione per giornate già giocate
                 righe_af = []
+                seen = set()
+                if df_storico is not None and not df_storico.empty and "Stag" in df_storico.columns:
+                    stag = df_storico[df_storico["Stag"] == df_storico["Stag"].max()]
+                    for _, r in stag.iterrows():
+                        key = (r["HomeTeam"], r["AwayTeam"], r["Date"].strftime("%Y-%m-%d") if pd.notna(r.get("Date")) else "")
+                        seen.add((r["HomeTeam"], r["AwayTeam"]))
+                        righe_af.append({
+                            "Giornata": 0,
+                            "Data": r["Date"].strftime("%Y-%m-%d") if pd.notna(r.get("Date")) else "",
+                            "Ora": str(r["Time"])[:5] if "Time" in r and pd.notna(r.get("Time")) else "",
+                            "Casa": r["HomeTeam"],
+                            "Trasferta": r["AwayTeam"],
+                            "GolC": int(r["FTHG"]) if pd.notna(r.get("FTHG")) else None,
+                            "GolT": int(r["FTAG"]) if pd.notna(r.get("FTAG")) else None,
+                            "Stato": "FINISHED",
+                            "_d": r["Date"] if pd.notna(r.get("Date")) else pd.Timestamp.max,
+                        })
                 for f in fxs:
+                    hc = mp.get(f["home"], f["home"])
+                    ac = mp.get(f["away"], f["away"])
+                    if (hc, ac) in seen:
+                        continue
+                    d_str = f.get("date") or ""
+                    try:
+                        _d = pd.Timestamp(d_str) if d_str else pd.Timestamp.max
+                    except Exception:
+                        _d = pd.Timestamp.max
                     righe_af.append({
                         "Giornata": 0,
-                        "Data": f.get("date") or "",
+                        "Data": d_str,
                         "Ora": "",
-                        "Casa": mp.get(f["home"], f["home"]),
-                        "Trasferta": mp.get(f["away"], f["away"]),
+                        "Casa": hc,
+                        "Trasferta": ac,
                         "GolC": None,
                         "GolT": None,
                         "Stato": "SCHEDULED",
+                        "_d": _d,
                     })
-                if righe_af:
-                    return pd.DataFrame(righe_af), "API-Football (fixtures CL/EL)"
+                if any(r["Stato"] == "SCHEDULED" for r in righe_af):
+                    righe_af.sort(key=lambda r: r.get("_d", pd.Timestamp.max))
+                    for r in righe_af:
+                        r.pop("_d", None)
+                    righe_af = assegna_giornate(righe_af)
+                    return pd.DataFrame(righe_af), "API-Football (future) + storico CSV"
         except Exception:
             pass
 
