@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.25
+# Combo Master Grook — v4.26
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -113,7 +113,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.25</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.26</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -166,6 +166,8 @@ ELO_SCALE = 400.0
 FORM_N = 6              # ultime N partite per la forma
 FORM_BLEND = 0.25       # peso forma recente sui λ (0=off)
 XG_BLEND = 0.20         # peso Understat xG, fisso (niente slider)
+RITMO_BLEND = 0.18      # adatta λ al ritmo gol recente della lega (graduale)
+RITMO_N_REC = 80        # ultime N partite lega per media gol recente
 UNDERSTAT_PATHS = ("data/understat_xg.csv", "understat_xg.csv")
 
 def _mtime_csv_label(*rels) -> str:
@@ -748,6 +750,30 @@ def fattore_forma(form_map, casa, trasf):
         exp_a = float(np.clip(exp_a, 0.6, 1.6))
         return exp_h, exp_a, fc, ft
     return 1.0, 1.0, fc, ft
+
+
+
+def fattore_ritmo_lega(df, n_rec=RITMO_N_REC) -> float:
+    """
+    Gol/partita recenti vs media storica del campione.
+    >1 = si segna di più ora (es. Serie A 2026/27); ~1 = stabile.
+    Si applica come (ratio ** RITMO_BLEND) su entrambi i λ — graduale, tutte le leghe.
+    """
+    if df is None or len(df) < 40:
+        return 1.0
+    if not {"FTHG", "FTAG"}.issubset(df.columns):
+        return 1.0
+    d = df.dropna(subset=["FTHG", "FTAG"]).copy()
+    if d.empty:
+        return 1.0
+    d["_tg"] = d["FTHG"].astype(float) + d["FTAG"].astype(float)
+    long_avg = float(d["_tg"].mean())
+    if long_avg <= 0.05:
+        return 1.0
+    if "Date" in d.columns:
+        d = d.sort_values("Date")
+    rec_avg = float(d.tail(min(n_rec, len(d)))["_tg"].mean())
+    return float(np.clip(rec_avg / long_avg, 0.85, 1.25))
 
 
 def lambda_full(m, casa, trasf, elo_map, form_map, elo_blend=ELO_BLEND, form_blend=FORM_BLEND):
@@ -2506,6 +2532,12 @@ def distribuzione(casa, trasf):
     fxg_h, fxg_a = fattore_xg(xg_map, casa, trasf)
     if xg_map and XG_BLEND > 0 and (casa in xg_map or trasf in xg_map):
         lh, la = lh * (fxg_h ** XG_BLEND), la * (fxg_a ** XG_BLEND)
+    _ritmo = fattore_ritmo_lega(df_storico)
+    if RITMO_BLEND > 0 and abs(_ritmo - 1.0) > 0.01:
+        _f = float(_ritmo ** RITMO_BLEND)
+        lh, la = lh * _f, la * _f
+    else:
+        _ritmo = 1.0
     Mb = matrice_punteggi(lh, la, modello["rho"])
     p1x2, p_ou, src = _risolvi_quote(casa, trasf)
     bits = []
@@ -2515,6 +2547,8 @@ def distribuzione(casa, trasf):
         bits.append(f"Forma U{FORM_N}: {fc['form_score']:+.2f}/{ft['form_score']:+.2f} ({int(FORM_BLEND*100)}%)")
     if casa in xg_map or trasf in xg_map:
         bits.append(f"xG ({int(XG_BLEND*100)}%)")
+    if abs(_ritmo - 1.0) > 0.015:
+        bits.append(f"ritmo lega ×{_ritmo:.2f} ({int(RITMO_BLEND*100)}%)")
     extra_src = (" · " + " · ".join(bits)) if bits else ""
     if p1x2 is not None:
         Ma = matrice_ancorata(p1x2, p_ou, modello["rho"], (lh, la))
@@ -2522,7 +2556,7 @@ def distribuzione(casa, trasf):
         return {
             "M_1x2": Ma, "M_gol": Ma, "M_es": Ma, "ancorata": True,
             "fonte": f"ancorata alle quote ({extra}, {src}){extra_src}",
-            "elo_c": elo_c, "elo_t": elo_t, "form_c": fc, "form_t": ft, "lh": lh, "la": la,
+            "elo_c": elo_c, "elo_t": elo_t, "form_c": fc, "form_t": ft, "lh": lh, "la": la, "ritmo": _ritmo,
         }
     Mg = pesi["gol"] * Mb + (1 - pesi["gol"]) * M_freq_live
     Me = pesi["esatto"] * Mb + (1 - pesi["esatto"]) * M_freq_live
@@ -2533,7 +2567,7 @@ def distribuzione(casa, trasf):
             f"{pesi['gol']*100:.0f}% Goal/Over, {pesi['esatto']*100:.0f}% esatti"
             f"{extra_src} – nessuna quota bookmaker"
         ),
-        "elo_c": elo_c, "elo_t": elo_t, "form_c": fc, "form_t": ft, "lh": lh, "la": la,
+        "elo_c": elo_c, "elo_t": elo_t, "form_c": fc, "form_t": ft, "lh": lh, "la": la, "ritmo": _ritmo,
     }
 
 
@@ -2653,6 +2687,7 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
     M = d["M_es"]
     mk = mercati(d["M_1x2"])
     mg = mercati(d["M_gol"])
+    syn = applica_affidabilita(sintesi_pronostico(d["M_1x2"]), cal, d["ancorata"])
     st.markdown(
         f"""
         <div style="background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
@@ -2665,6 +2700,56 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
         """,
         unsafe_allow_html=True,
     )
+
+    # --- PRONOSTICO PRINCIPALE (in cima) ---
+    st.markdown("### 🎯 Pronostico principale")
+    if not d["ancorata"]:
+        st.warning(
+            "⚠️ **Senza quote book → solo modello.** "
+            "Le % sotto sono Dixon-Coles + forma/Elo/xG (eventualmente calibrate). "
+            "Non usarle come value bet: manca l’ancoraggio al bookmaker."
+        )
+    else:
+        st.success("✅ **Con quote book** (senza margine): 1X2 ancorato al mercato.")
+    a1, a2, a3 = st.columns(3)
+    a1.metric("1 (Casa)", f"{mk['p1']*100:.1f}%", f"Equa: {1/mk['p1']:.2f}")
+    a2.metric("X (Pareggio)", f"{mk['px']*100:.1f}%", f"Equa: {1/mk['px']:.2f}")
+    a3.metric("2 (Trasferta)", f"{mk['p2']*100:.1f}%", f"Equa: {1/mk['p2']:.2f}")
+    if syn.get("calib"):
+        st.caption(
+            f"1X2 calibrato su {cal['n']} partite passate: la percentuale è più vicina a quante volte è uscito davvero. "
+            + _testo_storico(cal, {"1": "p1", "X": "px", "2": "p2"}[syn["segno"]],
+                            {"1": syn["p1"], "X": syn["px"], "2": syn["p2"]}[syn["segno"]])
+            + "."
+        )
+    elif d["ancorata"]:
+        st.caption("1X2 dalle quote senza margine: stima più affidabile disponibile.")
+    else:
+        st.caption("Calibrazione non disponibile: percentuali modello, più cautela.")
+    if syn["equilibrata"]:
+        st.caption("Partita equilibrata: segno **X** (esiti vicini, pareggio competitivo).")
+    else:
+        st.caption(f"Segno sul massimo (**{syn['segno_max']}**). X = {syn['px']*100:.0f}%.")
+    st.caption("Da usare: segno, doppia chance, Over 2.5 e Goal/No Goal. Il resto è indicativo.")
+    p1c, p2c, p3c, p4c, p5c = st.columns(5)
+    p1c.metric("Segno 1X2", syn["segno"], f"{({'1': syn['p1'], 'X': syn['px'], '2': syn['p2']})[syn['segno']]*100:.0f}%")
+    p2c.metric("Doppia chance", syn["dc"], f"{syn['dc_p']*100:.0f}%")
+    p3c.metric("Combo gol", syn["combo"], f"{syn['combo_p']*100:.0f}%")
+    p4c.metric("Combo O/U", syn["ou"].split("+ ", 1)[-1], f"{syn['ou_p']*100:.0f}%")
+    p5c.metric("Multigol", syn["mg"], f"{syn['mg_p']*100:.0f}%")
+    # Over/Goal in evidenza subito sotto il pronostico
+    over25 = mg["over2.5"] if d["ancorata"] else prob_calibrata(mg["over2.5"], cal, "over25")
+    btts = mg["btts"] if d["ancorata"] else prob_calibrata(mg["btts"], cal, "btts")
+    u1, u2, u3 = st.columns(3)
+    u1.metric("Over 2.5", f"{over25*100:.1f}%", f"Under {(1-over25)*100:.1f}%")
+    u2.metric("Goal (BTTS)", f"{btts*100:.1f}%", f"No Goal {(1-btts)*100:.1f}%")
+    _r = d.get("ritmo", 1.0)
+    if abs(_r - 1.0) > 0.02:
+        u3.metric("Ritmo lega", f"×{_r:.2f}", "gol recenti vs storico")
+    else:
+        u3.metric("Ritmo lega", "≈ storico", "stabile")
+    st.divider()
+
     col_sq, col_st = st.columns([1.2, 1.8])
     with col_sq:
         st.markdown(
@@ -2701,57 +2786,8 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
                 unsafe_allow_html=True,
             )
 
-    st.markdown(f"<h3>🔬 Poisson / Dixon-Coles · {casa} vs {trasf}</h3>", unsafe_allow_html=True)
+    st.markdown(f"<h3>🔬 Dettaglio modello · {casa} vs {trasf}</h3>", unsafe_allow_html=True)
     st.caption(f"Fonte Goal / Over / Esatti: {d['fonte']}.")
-    if not d["ancorata"]:
-        st.warning(
-            "⚠️ **Senza quote book → solo modello.** "
-            "Le % sotto sono Dixon-Coles + forma/Elo/xG (eventualmente calibrate). "
-            "Non usarle come value bet: manca l’ancoraggio al bookmaker."
-        )
-    else:
-        st.success(
-            "✅ **Con quote book** (senza margine): 1X2 ancorato al mercato."
-        )
-    a1, a2, a3 = st.columns(3)
-    a1.metric("1 (Casa)", f"{mk['p1']*100:.1f}%", f"Equa: {1/mk['p1']:.2f}")
-    a2.metric("X (Pareggio)", f"{mk['px']*100:.1f}%", f"Equa: {1/mk['px']:.2f}")
-    a3.metric("2 (Trasferta)", f"{mk['p2']*100:.1f}%", f"Equa: {1/mk['p2']:.2f}")
-
-    syn = applica_affidabilita(sintesi_pronostico(d["M_1x2"]), cal, d["ancorata"])
-    st.markdown("#### Pronostico")
-    if syn.get("calib"):
-        st.caption(
-            f"1X2 calibrato su {cal['n']} partite passate: la percentuale è più vicina a quante volte è uscito davvero. "
-            + _testo_storico(cal, {"1": "p1", "X": "px", "2": "p2"}[syn["segno"]],
-                            {"1": syn["p1"], "X": syn["px"], "2": syn["p2"]}[syn["segno"]])
-            + "."
-        )
-    elif d["ancorata"]:
-        st.caption(
-            "1X2 preso dalle quote, senza margine del book: è la stima più affidabile che abbiamo."
-        )
-    else:
-        st.caption("Calibrazione non disponibile su questo campionato: percentuali del modello, da prendere con più cautela.")
-    if syn["equilibrata"]:
-        st.caption(
-            "Partita equilibrata: i due esiti sono vicini e il pareggio è competitivo, quindi il segno è **X**."
-        )
-    else:
-        st.caption(
-            f"Segno sul massimo di probabilità (**{syn['segno_max']}**). "
-            f"X = {syn['px']*100:.0f}%."
-        )
-    st.caption(
-        "Da usare: segno, doppia chance, Over 2.5 e Goal/No Goal. "
-        "Combo, multigol e risultato esatto sono **indicativi** (fasce larghe o probabilità basse)."
-    )
-    p1c, p2c, p3c, p4c, p5c = st.columns(5)
-    p1c.metric("Segno 1X2", syn["segno"], f"{({'1': syn['p1'], 'X': syn['px'], '2': syn['p2']})[syn['segno']]*100:.0f}%")
-    p2c.metric("Doppia chance", syn["dc"], f"{syn['dc_p']*100:.0f}%")
-    p3c.metric("Combo gol", syn["combo"], f"{syn['combo_p']*100:.0f}%")
-    p4c.metric("Combo O/U", syn["ou"].split("+ ", 1)[-1], f"{syn['ou_p']*100:.0f}%")
-    p5c.metric("Multigol", syn["mg"], f"{syn['mg_p']*100:.0f}%")
     def _riga_card(titolo, voci, scelta=None):
         celle = []
         for nome, p in voci:
