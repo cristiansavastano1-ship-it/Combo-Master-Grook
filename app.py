@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.34
+# Combo Master Grook — v4.35
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -31,7 +31,6 @@ st.set_page_config(
 # --- DESIGN ---
 st.markdown(
     """
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
     <style>
     /* system fonts: su iOS più veloci e stabili */
     html, body, [class*="css"] {
@@ -161,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.34</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.35</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -248,6 +247,214 @@ ODDS_API_SPORT = {
     "CL": "soccer_uefa_champs_league",
     "EL": "soccer_uefa_europa_league",
 }
+
+def _odds_api_budget_path() -> Path:
+    for p in (Path("data/odds_api_budget.json"), Path("odds_api_budget.json")):
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            return p
+        except Exception:
+            continue
+    return Path("odds_api_budget.json")
+
+
+def _odds_api_load_budget():
+    """Contatore mensile locale + last remaining da header API."""
+    fp = _odds_api_budget_path()
+    mese = date.today().strftime("%Y-%m")
+    default = {"mese": mese, "usati": 0, "remaining": ODDS_API_MONTHLY_LIMIT, "last_err": ""}
+    try:
+        if fp.is_file():
+            import json as _json
+            d = _json.loads(fp.read_text(encoding="utf-8"))
+            if d.get("mese") != mese:
+                return default
+            return {
+                "mese": mese,
+                "usati": int(d.get("usati") or 0),
+                "remaining": int(d.get("remaining") if d.get("remaining") is not None else ODDS_API_MONTHLY_LIMIT),
+                "last_err": d.get("last_err") or "",
+            }
+    except Exception:
+        pass
+    return default
+
+
+def _odds_api_save_budget(usati: int, remaining: int, last_err: str = ""):
+    fp = _odds_api_budget_path()
+    try:
+        import json as _json
+        fp.write_text(
+            _json.dumps({
+                "mese": date.today().strftime("%Y-%m"),
+                "usati": int(usati),
+                "remaining": int(remaining),
+                "last_err": last_err or "",
+            }),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _odds_api_can_spend(min_credits: int = 2) -> bool:
+    b = _odds_api_load_budget()
+    if b["remaining"] < min_credits:
+        return False
+    if b["usati"] >= ODDS_API_MONTHLY_LIMIT:
+        return False
+    return True
+
+
+@st.cache_data(ttl=8 * 3600, show_spinner=False)
+def scarica_odds_the_odds_api(div: str, api_key: str, giorno: str):
+    """
+    Quote 1X2 + O/U da The Odds API (1 call = 2 crediti: h2h+totals, region eu).
+    Se budget esaurito o errore → {}.
+    Ritorna dict (home_norm, away_norm) -> ((p1,px,p2), p_over25_or_None)
+    con probabilità già senza margine medio se multi-book.
+    """
+    if not api_key or div not in ODDS_API_SPORT:
+        return {}
+    if not _odds_api_can_spend(2):
+        return {}
+    sport = ODDS_API_SPORT[div]
+    try:
+        r = requests.get(
+            f"{ODDS_API_BASE}/sports/{sport}/odds",
+            params={
+                "apiKey": api_key,
+                "regions": "eu",
+                "markets": "h2h,totals",
+                "oddsFormat": "decimal",
+            },
+            timeout=20,
+        )
+    except Exception as e:
+        b = _odds_api_load_budget()
+        _odds_api_save_budget(b["usati"], b["remaining"], str(e)[:80])
+        return {}
+
+    # aggiorna budget da header
+    b = _odds_api_load_budget()
+    try:
+        rem = r.headers.get("x-requests-remaining")
+        used = r.headers.get("x-requests-used")
+        if rem is not None:
+            b["remaining"] = int(float(rem))
+        if used is not None:
+            b["usati"] = int(float(used))
+        else:
+            # stima +2 se 200
+            if r.status_code == 200:
+                b["usati"] = min(ODDS_API_MONTHLY_LIMIT, b["usati"] + 2)
+                b["remaining"] = max(0, b["remaining"] - 2)
+    except Exception:
+        pass
+
+    if r.status_code == 401:
+        _odds_api_save_budget(b["usati"], b["remaining"], "API key non valida")
+        return {}
+    if r.status_code == 429:
+        _odds_api_save_budget(b["usati"], 0, "quota esaurita (429)")
+        return {}
+    if r.status_code != 200:
+        _odds_api_save_budget(b["usati"], b["remaining"], f"HTTP {r.status_code}")
+        return {}
+
+    try:
+        data = r.json()
+    except Exception:
+        _odds_api_save_budget(b["usati"], b["remaining"], "JSON non valido")
+        return {}
+    if not isinstance(data, list):
+        _odds_api_save_budget(b["usati"], b["remaining"], "risposta non lista")
+        return {}
+
+    _odds_api_save_budget(b["usati"], b["remaining"], "")
+
+    out = {}
+    for ev in data:
+        home = (ev.get("home_team") or "").strip()
+        away = (ev.get("away_team") or "").strip()
+        if not home or not away:
+            continue
+        books = ev.get("bookmakers") or []
+        # media quote h2h e totals 2.5
+        h_odds, d_odds, a_odds = [], [], []
+        over_odds, under_odds = [], []
+        for bk in books:
+            for mkt in (bk.get("markets") or []):
+                key = mkt.get("key")
+                outcomes = mkt.get("outcomes") or []
+                if key == "h2h":
+                    for o in outcomes:
+                        name, price = o.get("name"), o.get("price")
+                        if not price or price <= 1:
+                            continue
+                        if name == home:
+                            h_odds.append(float(price))
+                        elif name == away:
+                            a_odds.append(float(price))
+                        elif name and name.lower() in ("draw", "tie", "x"):
+                            d_odds.append(float(price))
+                elif key == "totals":
+                    for o in outcomes:
+                        # point 2.5 tipico
+                        pt = o.get("point")
+                        if pt is not None and abs(float(pt) - 2.5) > 0.01:
+                            continue
+                        name, price = o.get("name"), o.get("price")
+                        if not price or price <= 1:
+                            continue
+                        if (name or "").lower() == "over":
+                            over_odds.append(float(price))
+                        elif (name or "").lower() == "under":
+                            under_odds.append(float(price))
+        if not (h_odds and d_odds and a_odds):
+            continue
+        # media aritmetica decimali → probabilità senza margine
+        def _avg(xs):
+            return sum(xs) / len(xs)
+
+        q1, qx, q2 = _avg(h_odds), _avg(d_odds), _avg(a_odds)
+        # senza_margine si aspetta tripla quote
+        try:
+            p1, px, p2 = senza_margine((q1, qx, q2))
+        except Exception:
+            s = 1 / q1 + 1 / qx + 1 / q2
+            p1, px, p2 = (1 / q1) / s, (1 / qx) / s, (1 / q2) / s
+        p_ou = None
+        if over_odds and under_odds:
+            qo, qu = _avg(over_odds), _avg(under_odds)
+            try:
+                p_ou = float(senza_margine((qo, qu))[0])
+            except Exception:
+                s2 = 1 / qo + 1 / qu
+                p_ou = (1 / qo) / s2
+        out[(_norm_sq(home), _norm_sq(away))] = ((float(p1), float(px), float(p2)), p_ou)
+        # anche chiavi grezze per match fuzzy
+        out[(home, away)] = ((float(p1), float(px), float(p2)), p_ou)
+    return out
+
+
+def _match_quote_odds_api(api_map, casa, trasf):
+    if not api_map:
+        return None
+    nc, nt = _norm_sq(casa), _norm_sq(trasf)
+    if (nc, nt) in api_map:
+        return api_map[(nc, nt)]
+    if (casa, trasf) in api_map:
+        return api_map[(casa, trasf)]
+    # fuzzy
+    for (h, a), val in api_map.items():
+        if not isinstance(h, str):
+            continue
+        hn, an = _norm_sq(h), _norm_sq(a)
+        if _similarita(hn, nc) >= 0.78 and _similarita(an, nt) >= 0.78:
+            return val
+    return None
+
 
 OPENFOOTBALL_JSON = {
     "I1": "it.1", "E0": "en.1", "E1": "en.2", "SP1": "es.1",
@@ -2938,213 +3145,6 @@ elif fx is not None and len(fx) == 0:
 
 
 
-
-def _odds_api_budget_path() -> Path:
-    for p in (Path("data/odds_api_budget.json"), Path("odds_api_budget.json")):
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            return p
-        except Exception:
-            continue
-    return Path("odds_api_budget.json")
-
-
-def _odds_api_load_budget():
-    """Contatore mensile locale + last remaining da header API."""
-    fp = _odds_api_budget_path()
-    mese = date.today().strftime("%Y-%m")
-    default = {"mese": mese, "usati": 0, "remaining": ODDS_API_MONTHLY_LIMIT, "last_err": ""}
-    try:
-        if fp.is_file():
-            import json as _json
-            d = _json.loads(fp.read_text(encoding="utf-8"))
-            if d.get("mese") != mese:
-                return default
-            return {
-                "mese": mese,
-                "usati": int(d.get("usati") or 0),
-                "remaining": int(d.get("remaining") if d.get("remaining") is not None else ODDS_API_MONTHLY_LIMIT),
-                "last_err": d.get("last_err") or "",
-            }
-    except Exception:
-        pass
-    return default
-
-
-def _odds_api_save_budget(usati: int, remaining: int, last_err: str = ""):
-    fp = _odds_api_budget_path()
-    try:
-        import json as _json
-        fp.write_text(
-            _json.dumps({
-                "mese": date.today().strftime("%Y-%m"),
-                "usati": int(usati),
-                "remaining": int(remaining),
-                "last_err": last_err or "",
-            }),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-def _odds_api_can_spend(min_credits: int = 2) -> bool:
-    b = _odds_api_load_budget()
-    if b["remaining"] < min_credits:
-        return False
-    if b["usati"] >= ODDS_API_MONTHLY_LIMIT:
-        return False
-    return True
-
-
-@st.cache_data(ttl=8 * 3600, show_spinner=False)
-def scarica_odds_the_odds_api(div: str, api_key: str, giorno: str):
-    """
-    Quote 1X2 + O/U da The Odds API (1 call = 2 crediti: h2h+totals, region eu).
-    Se budget esaurito o errore → {}.
-    Ritorna dict (home_norm, away_norm) -> ((p1,px,p2), p_over25_or_None)
-    con probabilità già senza margine medio se multi-book.
-    """
-    if not api_key or div not in ODDS_API_SPORT:
-        return {}
-    if not _odds_api_can_spend(2):
-        return {}
-    sport = ODDS_API_SPORT[div]
-    try:
-        r = requests.get(
-            f"{ODDS_API_BASE}/sports/{sport}/odds",
-            params={
-                "apiKey": api_key,
-                "regions": "eu",
-                "markets": "h2h,totals",
-                "oddsFormat": "decimal",
-            },
-            timeout=20,
-        )
-    except Exception as e:
-        b = _odds_api_load_budget()
-        _odds_api_save_budget(b["usati"], b["remaining"], str(e)[:80])
-        return {}
-
-    # aggiorna budget da header
-    b = _odds_api_load_budget()
-    try:
-        rem = r.headers.get("x-requests-remaining")
-        used = r.headers.get("x-requests-used")
-        if rem is not None:
-            b["remaining"] = int(float(rem))
-        if used is not None:
-            b["usati"] = int(float(used))
-        else:
-            # stima +2 se 200
-            if r.status_code == 200:
-                b["usati"] = min(ODDS_API_MONTHLY_LIMIT, b["usati"] + 2)
-                b["remaining"] = max(0, b["remaining"] - 2)
-    except Exception:
-        pass
-
-    if r.status_code == 401:
-        _odds_api_save_budget(b["usati"], b["remaining"], "API key non valida")
-        return {}
-    if r.status_code == 429:
-        _odds_api_save_budget(b["usati"], 0, "quota esaurita (429)")
-        return {}
-    if r.status_code != 200:
-        _odds_api_save_budget(b["usati"], b["remaining"], f"HTTP {r.status_code}")
-        return {}
-
-    try:
-        data = r.json()
-    except Exception:
-        _odds_api_save_budget(b["usati"], b["remaining"], "JSON non valido")
-        return {}
-    if not isinstance(data, list):
-        _odds_api_save_budget(b["usati"], b["remaining"], "risposta non lista")
-        return {}
-
-    _odds_api_save_budget(b["usati"], b["remaining"], "")
-
-    out = {}
-    for ev in data:
-        home = (ev.get("home_team") or "").strip()
-        away = (ev.get("away_team") or "").strip()
-        if not home or not away:
-            continue
-        books = ev.get("bookmakers") or []
-        # media quote h2h e totals 2.5
-        h_odds, d_odds, a_odds = [], [], []
-        over_odds, under_odds = [], []
-        for bk in books:
-            for mkt in (bk.get("markets") or []):
-                key = mkt.get("key")
-                outcomes = mkt.get("outcomes") or []
-                if key == "h2h":
-                    for o in outcomes:
-                        name, price = o.get("name"), o.get("price")
-                        if not price or price <= 1:
-                            continue
-                        if name == home:
-                            h_odds.append(float(price))
-                        elif name == away:
-                            a_odds.append(float(price))
-                        elif name and name.lower() in ("draw", "tie", "x"):
-                            d_odds.append(float(price))
-                elif key == "totals":
-                    for o in outcomes:
-                        # point 2.5 tipico
-                        pt = o.get("point")
-                        if pt is not None and abs(float(pt) - 2.5) > 0.01:
-                            continue
-                        name, price = o.get("name"), o.get("price")
-                        if not price or price <= 1:
-                            continue
-                        if (name or "").lower() == "over":
-                            over_odds.append(float(price))
-                        elif (name or "").lower() == "under":
-                            under_odds.append(float(price))
-        if not (h_odds and d_odds and a_odds):
-            continue
-        # media aritmetica decimali → probabilità senza margine
-        def _avg(xs):
-            return sum(xs) / len(xs)
-
-        q1, qx, q2 = _avg(h_odds), _avg(d_odds), _avg(a_odds)
-        # senza_margine si aspetta tripla quote
-        try:
-            p1, px, p2 = senza_margine((q1, qx, q2))
-        except Exception:
-            s = 1 / q1 + 1 / qx + 1 / q2
-            p1, px, p2 = (1 / q1) / s, (1 / qx) / s, (1 / q2) / s
-        p_ou = None
-        if over_odds and under_odds:
-            qo, qu = _avg(over_odds), _avg(under_odds)
-            try:
-                p_ou = float(senza_margine((qo, qu))[0])
-            except Exception:
-                s2 = 1 / qo + 1 / qu
-                p_ou = (1 / qo) / s2
-        out[(_norm_sq(home), _norm_sq(away))] = ((float(p1), float(px), float(p2)), p_ou)
-        # anche chiavi grezze per match fuzzy
-        out[(home, away)] = ((float(p1), float(px), float(p2)), p_ou)
-    return out
-
-
-def _match_quote_odds_api(api_map, casa, trasf):
-    if not api_map:
-        return None
-    nc, nt = _norm_sq(casa), _norm_sq(trasf)
-    if (nc, nt) in api_map:
-        return api_map[(nc, nt)]
-    if (casa, trasf) in api_map:
-        return api_map[(casa, trasf)]
-    # fuzzy
-    for (h, a), val in api_map.items():
-        if not isinstance(h, str):
-            continue
-        hn, an = _norm_sq(h), _norm_sq(a)
-        if _similarita(hn, nc) >= 0.78 and _similarita(an, nt) >= 0.78:
-            return val
-    return None
 
 
 def _risolvi_quote(casa, trasf):
