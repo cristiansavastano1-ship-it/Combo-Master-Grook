@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.30
+# Combo Master Grook — v4.32
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -113,7 +113,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.30</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.32</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -233,7 +233,14 @@ COL_PRESA = [("AvgH", "AvgD", "AvgA"), ("B365H", "B365D", "B365A"), ("PSH", "PSD
 COL_CHIUSURA = [("PSCH", "PSCD", "PSCA"), ("AvgCH", "AvgCD", "AvgCA"), ("B365CH", "B365CD", "B365CA")]
 COL_OU_PRESA = [("Avg>2.5", "Avg<2.5"), ("B365>2.5", "B365<2.5"), ("P>2.5", "P<2.5"), ("Max>2.5", "Max<2.5")]
 COL_OU_CHIUSURA = [("AvgC>2.5", "AvgC<2.5"), ("PC>2.5", "PC<2.5"), ("B365C>2.5", "B365C<2.5")]
-STAT_COLONNE = {"Tiri": ("HS", "AS"), "Tiri in Porta": ("HST", "AST"), "Corner": ("HC", "AC"), "Falli": ("HF", "AF")}
+STAT_COLONNE = {
+    "Tiri": ("HS", "AS"),
+    "Tiri in Porta": ("HST", "AST"),
+    "Corner": ("HC", "AC"),
+    "Falli": ("HF", "AF"),
+    "Cartellini gialli": ("HY", "AY"),
+}
+
 
 _STOP_NOMI = {
     "fc", "ac", "as", "cf", "afc", "acf", "ssc", "us", "ud", "rc", "rcd", "sv", "vfl", "vfb",
@@ -2580,6 +2587,92 @@ def stats_attese(df, casa, trasf, k=5):
     return out
 
 
+
+def predici_chi_di_piu(df, casa, trasf, k=6):
+    """
+    Stima chi in questa partita farà più corner / tiri in porta / cartellini,
+    incluso il pari (X): le due squadre possono finire a pari cifre.
+    P(>) / P(=) / P(<) approssimate con due Poisson indipendenti sui conteggi attesi.
+    Indicativo, non quote book.
+    """
+    out = {}
+    if df is None or df.empty:
+        return out
+
+    def _p_poisson_cmp(mu_c: float, mu_t: float, n_max: int = 25):
+        """P(C>T), P(C=T), P(C<T) con C~Pois(mu_c), T~Pois(mu_t) indipendenti."""
+        mu_c = max(float(mu_c), 0.05)
+        mu_t = max(float(mu_t), 0.05)
+        # pmf via ricorrenza
+        pc = np.zeros(n_max + 1)
+        pt = np.zeros(n_max + 1)
+        pc[0] = np.exp(-mu_c)
+        pt[0] = np.exp(-mu_t)
+        for i in range(1, n_max + 1):
+            pc[i] = pc[i - 1] * mu_c / i
+            pt[i] = pt[i - 1] * mu_t / i
+        p_gt = p_eq = p_lt = 0.0
+        for i in range(n_max + 1):
+            for j in range(n_max + 1):
+                p = pc[i] * pt[j]
+                if i > j:
+                    p_gt += p
+                elif i == j:
+                    p_eq += p
+                else:
+                    p_lt += p
+        s = p_gt + p_eq + p_lt
+        if s <= 0:
+            return 1 / 3, 1 / 3, 1 / 3
+        return p_gt / s, p_eq / s, p_lt / s
+
+    specs = [
+        ("Corner", "HC", "AC"),
+        ("Tiri in porta", "HST", "AST"),
+        ("Cartellini", "HY", "AY"),
+    ]
+    for label, h_col, a_col in specs:
+        if h_col not in df.columns or a_col not in df.columns:
+            continue
+        d = df.dropna(subset=[h_col, a_col]).copy()
+        if len(d) < 30:
+            continue
+        lega_h, lega_a = float(d[h_col].mean()), float(d[a_col].mean())
+
+        def sm(serie, lega):
+            n = len(serie)
+            if n == 0:
+                return lega
+            return (serie.sum() + k * lega) / (n + k)
+
+        dc_h = d[d["HomeTeam"] == casa]
+        dc_a = d[d["AwayTeam"] == casa]
+        exp_casa = 0.55 * sm(dc_h[h_col], lega_h) + 0.45 * sm(dc_a[a_col], lega_a)
+
+        dt_h = d[d["HomeTeam"] == trasf]
+        dt_a = d[d["AwayTeam"] == trasf]
+        exp_trasf = 0.45 * sm(dt_h[h_col], lega_h) + 0.55 * sm(dt_a[a_col], lega_a)
+
+        p1, px, p2 = _p_poisson_cmp(exp_casa, exp_trasf)
+        # segno stile 1 / X / 2
+        if px >= p1 and px >= p2:
+            segno = "X"
+        elif p1 >= p2:
+            segno = "1"
+        else:
+            segno = "2"
+        out[label] = {
+            "casa": round(float(exp_casa), 2),
+            "trasf": round(float(exp_trasf), 2),
+            "p1": float(p1),
+            "px": float(px),
+            "p2": float(p2),
+            "segno": segno,
+            "favorita": casa if segno == "1" else (trasf if segno == "2" else "Pari (X)"),
+        }
+    return out
+
+
 def tabella_classifica(df_stag):
     righe = {}
     for r in df_stag.itertuples():
@@ -2963,6 +3056,36 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
         u3.metric("Ritmo lega", f"×{_r:.2f}", "gol recenti vs storico")
     else:
         u3.metric("Ritmo lega", "≈ storico", "stabile")
+    # Chi di più: corner, tiri in porta, cartellini
+    try:
+        _cdp = predici_chi_di_piu(df_storico, casa, trasf)
+    except Exception:
+        _cdp = {}
+    if _cdp:
+        st.markdown("#### Chi di più · 1 / X / 2 · indicativo")
+        st.caption(
+            "1 = più la casa · **X = stesso numero** in partita · 2 = più la trasferta. "
+            "Stima Poisson su medie storiche (non quote book)."
+        )
+        cols = st.columns(len(_cdp))
+        for col, (label, info) in zip(cols, _cdp.items()):
+            with col:
+                seg = info["segno"]
+                if seg == "X":
+                    titolo = "X · Pari"
+                elif seg == "1":
+                    titolo = f"1 · {casa}"
+                else:
+                    titolo = f"2 · {trasf}"
+                st.metric(
+                    label,
+                    titolo,
+                    f"{info['casa']:.1f} vs {info['trasf']:.1f}",
+                )
+                st.caption(
+                    f"1 `{info['p1']*100:.0f}%` · X `{info['px']*100:.0f}%` · 2 `{info['p2']*100:.0f}%`"
+                )
+
     st.divider()
 
     col_sq, col_st = st.columns([1.2, 1.8])
