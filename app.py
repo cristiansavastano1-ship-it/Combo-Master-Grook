@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.32
+# Combo Master Grook — v4.34
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -24,96 +24,144 @@ st.set_page_config(
     page_title="Combo Master Grook",
     layout="wide",
     page_icon="⚽",
-    initial_sidebar_state="auto",
+    initial_sidebar_state="collapsed",  # su iPhone parte dal contenuto; apri ☰ per chiavi
+
 )
 
 # --- DESIGN ---
 st.markdown(
     """
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
     <style>
-    /* niente Google Fonts: su iOS a volte blocca il caricamento */
+    /* system fonts: su iOS più veloci e stabili */
     html, body, [class*="css"] {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
     }
-    #MainMenu, footer { visibility: hidden; }
-    .stApp { background-color: #0b0f19; color: #f3f4f6; }
-    /* evita overflow orizzontale su iPhone */
-    .stApp, .block-container { overflow-x: hidden; }
+    #MainMenu, footer, header [data-testid="stToolbar"] { visibility: hidden; height: 0; }
+    .stApp {
+        background-color: #0b0f19;
+        color: #f3f4f6;
+        /* notch / home indicator iPhone */
+        padding: env(safe-area-inset-top) env(safe-area-inset-right)
+                 env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+    .stApp, .block-container { overflow-x: hidden; max-width: 100vw; }
     .block-container {
-        padding-top: 1.2rem; padding-bottom: 3rem;
+        padding-top: 0.8rem;
+        padding-bottom: calc(2.5rem + env(safe-area-inset-bottom));
         max-width: 1280px;
-        padding-left: 1rem; padding-right: 1rem;
+        padding-left: max(0.75rem, env(safe-area-inset-left));
+        padding-right: max(0.75rem, env(safe-area-inset-right));
     }
     [data-testid="stSidebar"] {
         background-color: #111827;
         border-right: 1px solid #1f2937;
     }
+    /* input ≥16px: evita zoom automatico Safari iOS */
+    input, textarea, select, .stTextInput input, .stSelectbox [data-baseweb="select"] {
+        font-size: 16px !important;
+    }
     .stButton>button {
         background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
-        color: white; border: none; border-radius: 10px; font-weight: 600;
-        padding: 0.55rem 1rem; transition: all 0.25s ease;
+        color: white; border: none; border-radius: 12px; font-weight: 600;
+        padding: 0.65rem 1rem;
         box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-        min-height: 2.6rem;
+        min-height: 44px; /* Apple HIG touch target */
+        -webkit-tap-highlight-color: transparent;
     }
-    .stButton>button:hover {
-        background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
-        box-shadow: 0 6px 16px rgba(59, 130, 246, 0.5);
+    .stButton>button:active {
+        transform: scale(0.98);
+        opacity: 0.92;
     }
     [data-testid="stMetric"] {
         background-color: #111827; border: 1px solid #1f2937;
-        padding: 12px; border-radius: 12px;
+        padding: 10px 12px; border-radius: 12px;
     }
-    [data-testid="stMetricLabel"] { color: #9ca3af !important; }
+    [data-testid="stMetricLabel"] { color: #9ca3af !important; font-size: 0.8rem !important; }
     [data-testid="stMetricValue"] { color: #38bdf8 !important; font-weight: 700 !important; }
-    div[data-testid="stTabs"] button { font-weight: 600; }
+    div[data-testid="stTabs"] button {
+        font-weight: 600;
+        min-height: 44px;
+        -webkit-tap-highlight-color: transparent;
+    }
+    /* header app più compatto su mobile */
+    .cmg-hero h1 { font-size: 1.55rem !important; }
+    .cmg-hero p { font-size: 0.85rem !important; }
 
     /* —— iPhone / iPad —— */
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 0.6rem;
-            padding-left: 0.6rem;
-            padding-right: 0.6rem;
+            padding-top: 0.4rem;
+            padding-left: 0.55rem;
+            padding-right: 0.55rem;
             max-width: 100%;
         }
-        [data-testid="stMetric"] { padding: 10px; margin-bottom: 6px; }
-        [data-testid="stMetricValue"] { font-size: 1.15rem !important; }
+        [data-testid="stMetric"] { padding: 8px 10px; margin-bottom: 4px; }
+        [data-testid="stMetricValue"] { font-size: 1.1rem !important; }
+        [data-testid="stMetricDelta"] { font-size: 0.75rem !important; }
         .stButton>button {
             width: 100%;
-            min-height: 2.8rem;
-            font-size: 0.95rem;
+            min-height: 48px;
+            font-size: 1rem;
+            border-radius: 14px;
         }
-        /* colonne più leggibili in verticale */
-        [data-testid="column"] {
-            width: 100% !important;
-            flex: 1 1 100% !important;
-            min-width: 100% !important;
+        /* NON forzare tutte le colonne a 100%: le metriche 1X2 restano in riga */
+        h1 { font-size: 1.35rem !important; line-height: 1.25; }
+        h2 { font-size: 1.15rem !important; }
+        h3 { font-size: 1.05rem !important; }
+        h4 { font-size: 0.98rem !important; }
+        p, li { font-size: 0.9rem; }
+        .stCaption, [data-testid="stCaptionContainer"] { font-size: 0.8rem !important; }
+        div[data-testid="stVerticalBlockBorderWrapper"] { margin-bottom: 0.35rem; }
+        .stMarkdown h3, .stMarkdown h4 { margin-top: 0.5rem; margin-bottom: 0.25rem; }
+        /* tabs scrollabili orizzontalmente */
+        div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            flex-wrap: nowrap;
         }
-        h1, h2, h3 { line-height: 1.25; }
-        p, li, .stCaption { font-size: 0.92rem; }
-    }
-    /* scheda compatta mobile */
-    @media (max-width: 768px) {
-        div[data-testid="stVerticalBlockBorderWrapper"] { margin-bottom: 0.4rem; }
-        .stMarkdown h3, .stMarkdown h4 { margin-top: 0.6rem; margin-bottom: 0.3rem; }
+        div[data-testid="stTabs"] button {
+            font-size: 0.82rem;
+            padding: 0.4rem 0.65rem;
+            white-space: nowrap;
+        }
+        /* select / expander più tocchi-friendly */
+        [data-baseweb="select"] > div { min-height: 44px; }
+        .streamlit-expanderHeader { min-height: 44px; }
+        /* lista giornata: testo più compatto */
+        .cmg-hero {
+            padding: 14px 16px !important;
+            margin-bottom: 12px !important;
+            border-radius: 14px !important;
+        }
     }
     @media (max-width: 480px) {
-        [data-testid="stMetricValue"] { font-size: 1.05rem !important; }
-        div[data-testid="stTabs"] button { font-size: 0.8rem; padding: 0.35rem 0.5rem; }
+        [data-testid="stMetricValue"] { font-size: 1rem !important; }
+        [data-testid="stMetric"] { padding: 7px 8px; }
+        /* su schermi stretti: 2 colonne metriche ok, evita 5 in una riga illeggibili */
+        div[data-testid="stHorizontalBlock"] {
+            gap: 0.35rem !important;
+        }
+    }
+    /* dark inputs */
+    .stTextInput input, .stNumberInput input {
+        border-radius: 10px !important;
     }
     </style>
-
     """,
     unsafe_allow_html=True,
 )
 
 st.markdown(
     """
-    <div style="background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%);
+    <div class="cmg-hero" style="background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%);
                 padding: 22px 25px; border-radius: 18px; border: 1px solid #312e81;
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.32</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.34</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -178,6 +226,29 @@ API_FOOTBALL_LEAGUE_ID = {
 
 # Calendario gratis openfootball (GitHub) — stagione corrente
 # football.json (JSON) oppure TXT nei repo country
+# The Odds API (the-odds-api.com) — quote free ~500 crediti/mese
+ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+ODDS_API_MONTHLY_LIMIT = 500
+ODDS_API_SPORT = {
+    "I1": "soccer_italy_serie_a",
+    "I2": "soccer_italy_serie_b",
+    "E0": "soccer_epl",
+    "E1": "soccer_efl_champ",
+    "SP1": "soccer_spain_la_liga",
+    "SP2": "soccer_spain_segunda_division",
+    "D1": "soccer_germany_bundesliga",
+    "D2": "soccer_germany_bundesliga2",
+    "F1": "soccer_france_ligue_one",
+    "F2": "soccer_france_ligue_two",
+    "N1": "soccer_netherlands_eredivisie",
+    "P1": "soccer_portugal_primeira_liga",
+    "B1": "soccer_belgium_first_div",
+    "T1": "soccer_turkey_super_league",
+    "SC0": "soccer_spl",
+    "CL": "soccer_uefa_champs_league",
+    "EL": "soccer_uefa_europa_league",
+}
+
 OPENFOOTBALL_JSON = {
     "I1": "it.1", "E0": "en.1", "E1": "en.2", "SP1": "es.1",
     "D1": "de.1", "F1": "fr.1", "N1": "nl.1", "P1": "pt.1",
@@ -2716,8 +2787,29 @@ st.sidebar.caption(
     "Quote 1X2 e O/U pre-match (anche CL/EL). Free = 100 req/giorno. "
     "Cache 6h quote · 12h giocatori. Apri poche leghe al giorno."
 )
+_odds_default = ""
+try:
+    import os as _os
+    _odds_default = _os.environ.get("ODDS_API_KEY", "") or st.secrets.get("ODDS_API_KEY", "")
+except Exception:
+    _odds_default = ""
+chiave_odds = st.sidebar.text_input(
+    "🔑 The Odds API (quote free ~500/mese)",
+    value=_odds_default,
+    type="password",
+    key="odds_api_key_input",
+)
+_b_odds = _odds_api_load_budget()
+st.sidebar.caption(
+    f"Odds API: usati ~{_b_odds['usati']}/{ODDS_API_MONTHLY_LIMIT} · "
+    f"rimanenti ~{_b_odds['remaining']}. "
+    "Esauriti → fixtures.csv / API-Football / solo modello."
+)
+if _b_odds.get("last_err"):
+    st.sidebar.caption(f"Ultimo Odds API: {_b_odds['last_err']}")
 st.sidebar.info(
-    "📱 **iPhone/iPad:** freccia in alto a sinistra per le chiavi. "
+    "📱 **iPhone:** tocca ☰ / freccia in alto a **sinistra** per lega e chiavi API. "
+    "Aggiungi a Home (Safari → Condividi → Aggiungi a Home) per usarla come app. "
     "Wi‑Fi al primo carico."
 )
 st.sidebar.caption(
@@ -2776,9 +2868,33 @@ if chiave_af:
         _n_fix_af = len(_fixtures_api_football(div, chiave_af, giorno) or [])
     except Exception:
         _n_fix_af = 0
+    chiave_odds = chiave_odds if "chiave_odds" in dir() else ""
     api_odds = scarica_odds_api_football(div, chiave_af, giorno)
     if api_odds:
         fonte_quote = "API-Football" if not quote_fixtures else "API-Football + fixtures.csv"
+
+    # The Odds API (solo se budget ok e chiave presente) — fallback automatico se vuoto
+    odds_api_map = {}
+    if chiave_odds and div in ODDS_API_SPORT and _odds_api_can_spend(2):
+        try:
+            odds_api_map = scarica_odds_the_odds_api(div, chiave_odds, giorno) or {}
+        except Exception:
+            odds_api_map = {}
+        if odds_api_map:
+            fonte_quote = (
+                "The Odds API + " + fonte_quote
+                if fonte_quote and fonte_quote != "nessuna"
+                else "The Odds API"
+            )
+        _b2 = _odds_api_load_budget()
+        st.sidebar.caption(
+            f"Odds API call: map {len(odds_api_map)} · rimanenti ~{_b2['remaining']}"
+        )
+    elif chiave_odds and not _odds_api_can_spend(2):
+        st.sidebar.warning(
+            "The Odds API: crediti esauriti o quasi. "
+            "Si usano fixtures.csv / API-Football / solo modello."
+        )
     else:
         if _n_fix_af == 0:
             st.sidebar.info(
@@ -2822,11 +2938,223 @@ elif fx is not None and len(fx) == 0:
 
 
 
+
+def _odds_api_budget_path() -> Path:
+    for p in (Path("data/odds_api_budget.json"), Path("odds_api_budget.json")):
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            return p
+        except Exception:
+            continue
+    return Path("odds_api_budget.json")
+
+
+def _odds_api_load_budget():
+    """Contatore mensile locale + last remaining da header API."""
+    fp = _odds_api_budget_path()
+    mese = date.today().strftime("%Y-%m")
+    default = {"mese": mese, "usati": 0, "remaining": ODDS_API_MONTHLY_LIMIT, "last_err": ""}
+    try:
+        if fp.is_file():
+            import json as _json
+            d = _json.loads(fp.read_text(encoding="utf-8"))
+            if d.get("mese") != mese:
+                return default
+            return {
+                "mese": mese,
+                "usati": int(d.get("usati") or 0),
+                "remaining": int(d.get("remaining") if d.get("remaining") is not None else ODDS_API_MONTHLY_LIMIT),
+                "last_err": d.get("last_err") or "",
+            }
+    except Exception:
+        pass
+    return default
+
+
+def _odds_api_save_budget(usati: int, remaining: int, last_err: str = ""):
+    fp = _odds_api_budget_path()
+    try:
+        import json as _json
+        fp.write_text(
+            _json.dumps({
+                "mese": date.today().strftime("%Y-%m"),
+                "usati": int(usati),
+                "remaining": int(remaining),
+                "last_err": last_err or "",
+            }),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _odds_api_can_spend(min_credits: int = 2) -> bool:
+    b = _odds_api_load_budget()
+    if b["remaining"] < min_credits:
+        return False
+    if b["usati"] >= ODDS_API_MONTHLY_LIMIT:
+        return False
+    return True
+
+
+@st.cache_data(ttl=8 * 3600, show_spinner=False)
+def scarica_odds_the_odds_api(div: str, api_key: str, giorno: str):
+    """
+    Quote 1X2 + O/U da The Odds API (1 call = 2 crediti: h2h+totals, region eu).
+    Se budget esaurito o errore → {}.
+    Ritorna dict (home_norm, away_norm) -> ((p1,px,p2), p_over25_or_None)
+    con probabilità già senza margine medio se multi-book.
+    """
+    if not api_key or div not in ODDS_API_SPORT:
+        return {}
+    if not _odds_api_can_spend(2):
+        return {}
+    sport = ODDS_API_SPORT[div]
+    try:
+        r = requests.get(
+            f"{ODDS_API_BASE}/sports/{sport}/odds",
+            params={
+                "apiKey": api_key,
+                "regions": "eu",
+                "markets": "h2h,totals",
+                "oddsFormat": "decimal",
+            },
+            timeout=20,
+        )
+    except Exception as e:
+        b = _odds_api_load_budget()
+        _odds_api_save_budget(b["usati"], b["remaining"], str(e)[:80])
+        return {}
+
+    # aggiorna budget da header
+    b = _odds_api_load_budget()
+    try:
+        rem = r.headers.get("x-requests-remaining")
+        used = r.headers.get("x-requests-used")
+        if rem is not None:
+            b["remaining"] = int(float(rem))
+        if used is not None:
+            b["usati"] = int(float(used))
+        else:
+            # stima +2 se 200
+            if r.status_code == 200:
+                b["usati"] = min(ODDS_API_MONTHLY_LIMIT, b["usati"] + 2)
+                b["remaining"] = max(0, b["remaining"] - 2)
+    except Exception:
+        pass
+
+    if r.status_code == 401:
+        _odds_api_save_budget(b["usati"], b["remaining"], "API key non valida")
+        return {}
+    if r.status_code == 429:
+        _odds_api_save_budget(b["usati"], 0, "quota esaurita (429)")
+        return {}
+    if r.status_code != 200:
+        _odds_api_save_budget(b["usati"], b["remaining"], f"HTTP {r.status_code}")
+        return {}
+
+    try:
+        data = r.json()
+    except Exception:
+        _odds_api_save_budget(b["usati"], b["remaining"], "JSON non valido")
+        return {}
+    if not isinstance(data, list):
+        _odds_api_save_budget(b["usati"], b["remaining"], "risposta non lista")
+        return {}
+
+    _odds_api_save_budget(b["usati"], b["remaining"], "")
+
+    out = {}
+    for ev in data:
+        home = (ev.get("home_team") or "").strip()
+        away = (ev.get("away_team") or "").strip()
+        if not home or not away:
+            continue
+        books = ev.get("bookmakers") or []
+        # media quote h2h e totals 2.5
+        h_odds, d_odds, a_odds = [], [], []
+        over_odds, under_odds = [], []
+        for bk in books:
+            for mkt in (bk.get("markets") or []):
+                key = mkt.get("key")
+                outcomes = mkt.get("outcomes") or []
+                if key == "h2h":
+                    for o in outcomes:
+                        name, price = o.get("name"), o.get("price")
+                        if not price or price <= 1:
+                            continue
+                        if name == home:
+                            h_odds.append(float(price))
+                        elif name == away:
+                            a_odds.append(float(price))
+                        elif name and name.lower() in ("draw", "tie", "x"):
+                            d_odds.append(float(price))
+                elif key == "totals":
+                    for o in outcomes:
+                        # point 2.5 tipico
+                        pt = o.get("point")
+                        if pt is not None and abs(float(pt) - 2.5) > 0.01:
+                            continue
+                        name, price = o.get("name"), o.get("price")
+                        if not price or price <= 1:
+                            continue
+                        if (name or "").lower() == "over":
+                            over_odds.append(float(price))
+                        elif (name or "").lower() == "under":
+                            under_odds.append(float(price))
+        if not (h_odds and d_odds and a_odds):
+            continue
+        # media aritmetica decimali → probabilità senza margine
+        def _avg(xs):
+            return sum(xs) / len(xs)
+
+        q1, qx, q2 = _avg(h_odds), _avg(d_odds), _avg(a_odds)
+        # senza_margine si aspetta tripla quote
+        try:
+            p1, px, p2 = senza_margine((q1, qx, q2))
+        except Exception:
+            s = 1 / q1 + 1 / qx + 1 / q2
+            p1, px, p2 = (1 / q1) / s, (1 / qx) / s, (1 / q2) / s
+        p_ou = None
+        if over_odds and under_odds:
+            qo, qu = _avg(over_odds), _avg(under_odds)
+            try:
+                p_ou = float(senza_margine((qo, qu))[0])
+            except Exception:
+                s2 = 1 / qo + 1 / qu
+                p_ou = (1 / qo) / s2
+        out[(_norm_sq(home), _norm_sq(away))] = ((float(p1), float(px), float(p2)), p_ou)
+        # anche chiavi grezze per match fuzzy
+        out[(home, away)] = ((float(p1), float(px), float(p2)), p_ou)
+    return out
+
+
+def _match_quote_odds_api(api_map, casa, trasf):
+    if not api_map:
+        return None
+    nc, nt = _norm_sq(casa), _norm_sq(trasf)
+    if (nc, nt) in api_map:
+        return api_map[(nc, nt)]
+    if (casa, trasf) in api_map:
+        return api_map[(casa, trasf)]
+    # fuzzy
+    for (h, a), val in api_map.items():
+        if not isinstance(h, str):
+            continue
+        hn, an = _norm_sq(h), _norm_sq(a)
+        if _similarita(hn, nc) >= 0.78 and _similarita(an, nt) >= 0.78:
+            return val
+    return None
+
+
 def _risolvi_quote(casa, trasf):
-    """Priorità: fixtures.csv esatto → API-Football (nome normalizzato) → None."""
+    """Priorità: fixtures.csv → The Odds API → API-Football → None."""
     q = quote_fixtures.get((casa, trasf))
     if q is not None:
         return q[0], q[1], "fixtures.csv"
+    oq = _match_quote_odds_api(odds_api_map, casa, trasf)
+    if oq is not None:
+        return oq[0], oq[1], "The Odds API"
     aq = _match_quote_api(api_odds, casa, trasf)
     if aq is not None:
         return aq[0], aq[1], "API-Football"
