@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.35
+# Combo Master Grook — v4.36
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.35</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.36</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -3067,69 +3067,13 @@ _fonti.append(f"Forma U{FORM_N} ({len(form_map)} sq)")
 if xg_map:
     _fonti.append(f"Understat xG {len(xg_map)}/{len(modello['squadre'])}")
 api_odds = {}
-_n_fix_af = 0
-if chiave_af:
-    _af_status = api_football_status(chiave_af)
-    st.sidebar.caption(f"API-Football status: {_af_status}")
-    try:
-        _n_fix_af = len(_fixtures_api_football(div, chiave_af, giorno) or [])
-    except Exception:
-        _n_fix_af = 0
-    chiave_odds = chiave_odds if "chiave_odds" in dir() else ""
-    api_odds = scarica_odds_api_football(div, chiave_af, giorno)
-    if api_odds:
-        fonte_quote = "API-Football" if not quote_fixtures else "API-Football + fixtures.csv"
-
-    # The Odds API (solo se budget ok e chiave presente) — fallback automatico se vuoto
-    odds_api_map = {}
-    if chiave_odds and div in ODDS_API_SPORT and _odds_api_can_spend(2):
-        try:
-            odds_api_map = scarica_odds_the_odds_api(div, chiave_odds, giorno) or {}
-        except Exception:
-            odds_api_map = {}
-        if odds_api_map:
-            fonte_quote = (
-                "The Odds API + " + fonte_quote
-                if fonte_quote and fonte_quote != "nessuna"
-                else "The Odds API"
-            )
-        _b2 = _odds_api_load_budget()
-        st.sidebar.caption(
-            f"Odds API call: map {len(odds_api_map)} · rimanenti ~{_b2['remaining']}"
-        )
-    elif chiave_odds and not _odds_api_can_spend(2):
-        st.sidebar.warning(
-            "The Odds API: crediti esauriti o quasi. "
-            "Si usano fixtures.csv / API-Football / solo modello."
-        )
-    else:
-        if _n_fix_af == 0:
-            st.sidebar.info(
-                "API-Football: 0 fixtures per questa lega (quote non disponibili). "
-                f"Status: {_af_status}. "
-                "I giocatori usano la ricerca per nome e funzionano lo stesso. "
-                "Prova «Clear cache» in Manage app se lo status è OK."
-            )
-        else:
-            st.sidebar.warning(
-                f"API-Football: {_n_fix_af} fixtures ma 0 quote. "
-                "Partite troppo vicine / book senza 1X2, oppure quota finita."
-            )
-
-_fonti.append(f"API quote {len(api_odds)}/{_n_fix_af if chiave_af else 0}")
-st.caption("📡 Fonti: " + " · ".join(_fonti))
-
-fx, fx_err = carica_fixtures(div)
-oggi_ts = pd.Timestamp.now().normalize()
-calendario, fonte_cal = costruisci_calendario(div, df_storico, fx, chiave_api, modello["squadre"], af_key=chiave_af, giorno=giorno)
-
-pesi = pesi_blend_auto(div, par["ridge"], par["halflife"], giorno, chiave_api)
-cal = calibrazione_live(div, par["ridge"], par["halflife"], giorno, chiave_api)
-M_freq_live = matrice_frequenze(df_storico)
-
-# Quote: 1) fixtures.csv  2) API-Football (sovrascrive se presenti)
-quote_fixtures = {}
+odds_api_map = {}
 fonte_quote = "nessuna"
+_n_fix_af = 0
+
+# 1) fixtures.csv (gratis)
+fx, fx_err = carica_fixtures(div)
+quote_fixtures = {}
 if fx is not None and len(fx) > 0:
     for _, _r in fx.iterrows():
         _q = prima_tripla(_r, COL_PRESA)
@@ -3142,6 +3086,71 @@ if fx is not None and len(fx) > 0:
         fonte_quote = "fixtures.csv senza quote utili per questa lega"
 elif fx is not None and len(fx) == 0:
     fonte_quote = "fixtures.csv: 0 partite per questa lega (aggiornato 2×/settimana)"
+
+# 2) The Odds API (se chiave + budget) — indipendente da API-Football
+try:
+    _ko = chiave_odds
+except NameError:
+    _ko = ""
+    chiave_odds = ""
+if _ko and div in ODDS_API_SPORT and _odds_api_can_spend(2):
+    try:
+        odds_api_map = scarica_odds_the_odds_api(div, _ko, giorno) or {}
+    except Exception:
+        odds_api_map = {}
+    if odds_api_map:
+        fonte_quote = (
+            "The Odds API + " + fonte_quote
+            if fonte_quote and fonte_quote != "nessuna"
+            else "The Odds API"
+        )
+        _b2 = _odds_api_load_budget()
+        st.sidebar.caption(
+            f"Odds API: {len(odds_api_map)} eventi · rimanenti ~{_b2['remaining']}"
+        )
+elif _ko and not _odds_api_can_spend(2):
+    st.sidebar.warning(
+        "The Odds API: crediti esauriti o quasi. "
+        "Si usano fixtures.csv / API-Football / solo modello."
+    )
+
+# 3) API-Football
+if chiave_af:
+    _af_status = api_football_status(chiave_af)
+    st.sidebar.caption(f"API-Football status: {_af_status}")
+    try:
+        _n_fix_af = len(_fixtures_api_football(div, chiave_af, giorno) or [])
+    except Exception:
+        _n_fix_af = 0
+    api_odds = scarica_odds_api_football(div, chiave_af, giorno) or {}
+    if api_odds:
+        if fonte_quote and fonte_quote != "nessuna":
+            fonte_quote = fonte_quote + " + API-Football"
+        else:
+            fonte_quote = "API-Football"
+    elif _n_fix_af == 0:
+        st.sidebar.info(
+            "API-Football: 0 fixtures per questa lega (quote non disponibili). "
+            f"Status: {_af_status}. "
+            "I giocatori usano la ricerca per nome e funzionano lo stesso."
+        )
+    else:
+        st.sidebar.warning(
+            f"API-Football: {_n_fix_af} fixtures ma 0 quote. "
+            "Partite troppo vicine / book senza 1X2, oppure quota finita."
+        )
+
+_fonti.append(f"API quote {len(api_odds)}/{_n_fix_af if chiave_af else 0}")
+if odds_api_map:
+    _fonti.append(f"OddsAPI {len(odds_api_map)}")
+st.caption("📡 Fonti: " + " · ".join(_fonti))
+
+oggi_ts = pd.Timestamp.now().normalize()
+calendario, fonte_cal = costruisci_calendario(div, df_storico, fx, chiave_api, modello["squadre"], af_key=chiave_af, giorno=giorno)
+
+pesi = pesi_blend_auto(div, par["ridge"], par["halflife"], giorno, chiave_api)
+cal = calibrazione_live(div, par["ridge"], par["halflife"], giorno, chiave_api)
+M_freq_live = matrice_frequenze(df_storico)
 
 
 
