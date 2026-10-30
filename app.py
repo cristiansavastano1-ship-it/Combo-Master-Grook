@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.28
+# Combo Master Grook — v4.30
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -113,7 +113,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.28</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.30</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -175,6 +175,25 @@ API_FOOTBALL_LEAGUE_ID = {
     "CL": 2,     # UEFA Champions League
     "EL": 3,     # UEFA Europa League
 }
+
+# Calendario gratis openfootball (GitHub) — stagione corrente
+# football.json (JSON) oppure TXT nei repo country
+OPENFOOTBALL_JSON = {
+    "I1": "it.1", "E0": "en.1", "E1": "en.2", "SP1": "es.1",
+    "D1": "de.1", "F1": "fr.1", "N1": "nl.1", "P1": "pt.1",
+}
+OPENFOOTBALL_TXT = {
+    "P1": ("europe", "portugal/2026-27_pt1.txt"),
+    "B1": ("belgium", "2026-27/be1.txt"),
+    "T1": ("europe", "turkey/2026-27_tr1.txt"),
+    "SC0": ("europe", "scotland/2026-27_sco1.txt"),
+    "G1": ("europe", "greece/2026-27_gr1.txt"),
+    "D2": ("deutschland", "2026-27/2-bundesliga1.txt"),
+    "SP2": ("espana", "2026-27/2-segunda1.txt"),
+    "F2": ("europe", "france/2026-27_fr2.txt"),
+    "I2": ("italy", "2026-27/2-serieb1.txt"),
+}
+
 BASE_URL = "https://football-data.co.uk"
 API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
 CLUBELO_URL = "http://api.clubelo.com"  # CSV giornaliero, nessuna API key
@@ -924,8 +943,8 @@ def _api_headers(api_key: str) -> dict:
 @st.cache_data(ttl=2 * 3600, show_spinner=False)
 def _fixtures_api_football(div: str, api_key: str, giorno: str):
     """
-    Fixtures future per la lega. Prova più combinazioni season/next/date.
-    Non memorizza a lungo i risultati vuoti (ttl 2h).
+    Fixtures non ancora finite per la lega (API-Football).
+    Prova next / from-to / status=NS-TBD-PST.
     """
     if not api_key or div not in API_FOOTBALL_LEAGUE_ID:
         return []
@@ -942,39 +961,40 @@ def _fixtures_api_football(div: str, api_key: str, giorno: str):
             away = teams.get("away") or {}
             hn, an = home.get("name") or "", away.get("name") or ""
             fid = fi.get("id")
-            if not fid or not hn or not an:
+            if not hn or not an:
                 continue
-            # salta già giocate se status finished
-            st = (fi.get("status") or {}).get("short") or ""
-            if st in ("FT", "AET", "PEN"):
+            st = ((fi.get("status") or {}).get("short") or "").upper()
+            if st in ("FT", "AET", "PEN", "AWD", "WO", "CANC", "ABD"):
                 continue
+            ts = fi.get("date") or ""
             rows.append({
                 "fid": fid,
                 "home": hn,
                 "away": an,
                 "home_id": home.get("id"),
                 "away_id": away.get("id"),
-                "date": (fi.get("date") or "")[:10],
+                "date": ts[:10] if ts else "",
+                "time": (ts[11:16] if len(ts) >= 16 else ""),
+                "status": st or "NS",
             })
         return rows
 
     base = date.fromisoformat(giorno) if giorno else date.today()
     d0 = base.isoformat()
-    d1 = (base + pd.Timedelta(days=21)).strftime("%Y-%m-%d")
-    d_yest = (base - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    d1 = (base + pd.Timedelta(days=45)).strftime("%Y-%m-%d")
 
     attempts = []
-    for seas in (season, season - 1, season + 1):
+    for seas in (season, season - 1):
         attempts.extend([
-            {"league": league_id, "season": seas, "next": 30},
+            {"league": league_id, "season": seas, "next": 40},
             {"league": league_id, "season": seas, "from": d0, "to": d1},
-            {"league": league_id, "season": seas, "from": d_yest, "to": d1},
-            {"league": league_id, "season": seas, "last": 5},  # almeno qualcosa di recente
+            {"league": league_id, "season": seas, "status": "NS"},
+            {"league": league_id, "season": seas, "status": "NS-TBD-PST"},
         ])
-    # senza season (alcuni piani rispondono meglio)
-    attempts.append({"league": league_id, "next": 20})
+    attempts.append({"league": league_id, "next": 40})
     attempts.append({"league": league_id, "from": d0, "to": d1})
 
+    last_err = None
     for params in attempts:
         try:
             r = requests.get(
@@ -983,19 +1003,21 @@ def _fixtures_api_football(div: str, api_key: str, giorno: str):
                 params=params,
                 timeout=18,
             )
-        except Exception:
+        except Exception as e:
+            last_err = type(e).__name__
             continue
         if r.status_code != 200:
+            last_err = f"HTTP {r.status_code}"
             continue
         body = r.json() or {}
-        # errori API espliciti
-        errs = body.get("errors")
-        if errs:
+        if body.get("errors"):
+            last_err = str(body.get("errors"))[:80]
             continue
         rows = _parse(body)
-        # preferisci future; se solo last, ok comunque
         if rows:
-            return rows[:15]
+            # ordina per data
+            rows.sort(key=lambda x: x.get("date") or "9999")
+            return rows[:40]
     return []
 
 
@@ -1364,6 +1386,126 @@ def assegna_giornate(righe):
     return righe
 
 
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def scarica_calendario_openfootball(div: str, squadre_modello):
+    """
+    Calendario stagione (giocate + future) da openfootball/football.json o TXT.
+    Gratis, nessuna chiave. Aggiornato ~1 volta al giorno su GitHub.
+    """
+    oggi = date.today()
+    anno = oggi.year if oggi.month >= 7 else oggi.year - 1
+    slug = f"{anno}-{str(anno + 1)[2:]}"  # 2026-27
+
+    righe = []
+
+    # 1) JSON football.json
+    code = OPENFOOTBALL_JSON.get(div)
+    if code:
+        for sl in (slug, f"{anno-1}-{str(anno)[2:]}"):
+            url = f"https://raw.githubusercontent.com/openfootball/football.json/master/{sl}/{code}.json"
+            try:
+                res = requests.get(url, timeout=18, headers=UA)
+                if res.status_code != 200 or len(res.content) < 100:
+                    continue
+                data = res.json()
+                matches = data.get("matches") or []
+                if not matches:
+                    continue
+                nomi = set()
+                for m in matches:
+                    if m.get("team1"):
+                        nomi.add(m["team1"])
+                    if m.get("team2"):
+                        nomi.add(m["team2"])
+                mp = mappa_nomi(nomi, squadre_modello) if squadre_modello else {}
+                for m in matches:
+                    t1, t2 = m.get("team1") or "", m.get("team2") or ""
+                    if not t1 or not t2:
+                        continue
+                    sc = m.get("score") or {}
+                    ft = sc.get("ft") if isinstance(sc, dict) else None
+                    gol_c = gol_t = None
+                    stato = "SCHEDULED"
+                    if ft and len(ft) >= 2 and ft[0] is not None and ft[1] is not None:
+                        gol_c, gol_t = int(ft[0]), int(ft[1])
+                        stato = "FINISHED"
+                    if (m.get("status") or "").lower() in ("postponed", "cancelled", "canceled"):
+                        stato = "POSTPONED"
+                    rnd = m.get("round") or ""
+                    gnum = 0
+                    mg = re.search(r"(\d+)", str(rnd))
+                    if mg:
+                        gnum = int(mg.group(1))
+                    d_str = m.get("date") or ""
+                    try:
+                        _d = pd.Timestamp(d_str) if d_str else pd.Timestamp.max
+                    except Exception:
+                        _d = pd.Timestamp.max
+                    righe.append({
+                        "Giornata": gnum,
+                        "Data": d_str,
+                        "Ora": (m.get("time") or "")[:5],
+                        "Casa": mp.get(t1, t1),
+                        "Trasferta": mp.get(t2, t2),
+                        "GolC": gol_c,
+                        "GolT": gol_t,
+                        "Stato": stato,
+                        "_d": _d,
+                    })
+                if righe:
+                    break
+            except Exception:
+                continue
+
+    # 2) TXT openfootball (Belgio, Turchia, Scozia, …)
+    if not righe and div in OPENFOOTBALL_TXT:
+        repo, path = OPENFOOTBALL_TXT[div]
+        # prova stagione corrente e -1
+        candidates = [path]
+        if "2026-27" in path:
+            candidates.append(path.replace("2026-27", "2025-26"))
+        for path_try in candidates:
+            url = f"https://raw.githubusercontent.com/openfootball/{repo}/master/{path_try}"
+            try:
+                res = requests.get(url, timeout=18, headers=UA)
+                if res.status_code != 200 or len(res.text) < 200:
+                    continue
+                d = _parse_openfootball_txt(res.text, anno)
+                if d is None or d.empty:
+                    continue
+                nomi = set(d["HomeTeam"].astype(str)) | set(d["AwayTeam"].astype(str))
+                mp = mappa_nomi(nomi, squadre_modello) if squadre_modello else {}
+                for _, r in d.iterrows():
+                    has_score = pd.notna(r.get("FTHG")) and pd.notna(r.get("FTAG"))
+                    d_str = r["Date"].strftime("%Y-%m-%d") if pd.notna(r.get("Date")) else ""
+                    righe.append({
+                        "Giornata": 0,
+                        "Data": d_str,
+                        "Ora": str(r["Time"])[:5] if "Time" in r and pd.notna(r.get("Time")) else "",
+                        "Casa": mp.get(r["HomeTeam"], r["HomeTeam"]),
+                        "Trasferta": mp.get(r["AwayTeam"], r["AwayTeam"]),
+                        "GolC": int(r["FTHG"]) if has_score else None,
+                        "GolT": int(r["FTAG"]) if has_score else None,
+                        "Stato": "FINISHED" if has_score else "SCHEDULED",
+                        "_d": r["Date"] if pd.notna(r.get("Date")) else pd.Timestamp.max,
+                    })
+                if righe:
+                    break
+            except Exception:
+                continue
+
+    if not righe:
+        return None
+    righe.sort(key=lambda x: x.get("_d", pd.Timestamp.max))
+    # assegna giornate se 0
+    if all(r.get("Giornata", 0) == 0 for r in righe):
+        righe = assegna_giornate(righe)
+    for r in righe:
+        r.pop("_d", None)
+    return pd.DataFrame(righe)
+
+
 def costruisci_calendario(div, df_storico, fx, chiave, squadre_modello, af_key: str = "", giorno: str = ""):
     """
     Priorità calendario futuro:
@@ -1398,6 +1540,16 @@ def costruisci_calendario(div, df_storico, fx, chiave, squadre_modello, af_key: 
         if any(r["Stato"] not in ("FINISHED", "AWARDED") for r in righe):
             return pd.DataFrame(righe), "football-data.org (calendario completo)"
         # altrimenti continua: magari solo storico
+
+    # openfootball / football.json (gratis, no key) — include partite future
+    try:
+        of = scarica_calendario_openfootball(div, squadre_modello)
+        if of is not None and not of.empty:
+            n_fut = int((of["Stato"] != "FINISHED").sum()) if "Stato" in of.columns else 0
+            if n_fut > 0 or len(of) > 10:
+                return of, f"openfootball ({n_fut} future)"
+    except Exception:
+        pass
 
     # API-Football: tutte le leghe mappate (non solo CL/EL)
     if af_key and div in API_FOOTBALL_LEAGUE_ID:
@@ -1441,7 +1593,7 @@ def costruisci_calendario(div, df_storico, fx, chiave, squadre_modello, af_key: 
                     righe_af.append({
                         "Giornata": 0,
                         "Data": d_str,
-                        "Ora": "",
+                        "Ora": f.get("time") or "",
                         "Casa": hc,
                         "Trasferta": ac,
                         "GolC": None,
@@ -3106,6 +3258,36 @@ with tab_calendario:
                     st.session_state["match_attivo"] = {
                         "div": div, "casa": casa, "trasf": trasf,
                         "data": row["Data"], "ora": row["Ora"],
+                    }
+
+    # Se non ci sono partite future in calendario: selettore manuale Scheda
+    _cal_ok = calendario is not None and not calendario.empty
+    _n_future = 0
+    if _cal_ok and "Stato" in calendario.columns:
+        _n_future = int((calendario["Stato"] != "FINISHED").sum())
+    if (not _cal_ok) or _n_future == 0:
+        st.info(
+            "📅 **Nessuna giornata futura in calendario** per questa lega "
+            "(football-data.org free non la copre; API-Football senza fixtures o chiave assente). "
+            "Puoi comunque aprire una **Scheda manuale** con le squadre del modello."
+        )
+        sq = sorted(modello.get("squadre") or [])
+        if len(sq) >= 2:
+            m1, m2, m3 = st.columns([2, 2, 1])
+            with m1:
+                casa_m = st.selectbox("Casa", sq, key=f"man_casa_{div}")
+            with m2:
+                trasf_m = st.selectbox("Trasferta", [s for s in sq if s != casa_m] or sq, key=f"man_trasf_{div}")
+            with m3:
+                st.write("")
+                st.write("")
+                if st.button("Apri Scheda", key=f"man_btn_{div}"):
+                    st.session_state["match_attivo"] = {
+                        "div": div,
+                        "casa": casa_m,
+                        "trasf": trasf_m,
+                        "data": date.today().isoformat(),
+                        "ora": "",
                     }
 
     att_m = st.session_state.get("match_attivo")
