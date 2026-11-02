@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.38
+# Combo Master Grook — v4.40
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.38</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.40</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -3306,24 +3306,31 @@ def distribuzione(casa, trasf):
     if abs(_ritmo - 1.0) > 0.015:
         bits.append(f"ritmo lega ×{_ritmo:.2f} ({int(RITMO_BLEND*100)}%)")
     extra_src = (" · " + " · ".join(bits)) if bits else ""
+    # Matrice solo modello (sempre) per confronto in Scheda
+    Mg = pesi["gol"] * Mb + (1 - pesi["gol"]) * M_freq_live
+    Me = pesi["esatto"] * Mb + (1 - pesi["esatto"]) * M_freq_live
+    base = {
+        "M_puro": Mb,
+        "elo_c": elo_c, "elo_t": elo_t, "form_c": fc, "form_t": ft,
+        "lh": lh, "la": la, "ritmo": _ritmo,
+        "p_book": p1x2, "p_ou_book": p_ou,
+    }
     if p1x2 is not None:
         Ma = matrice_ancorata(p1x2, p_ou, modello["rho"], (lh, la))
         extra = "1X2 + O/U 2.5" if p_ou is not None else "solo 1X2"
         return {
+            **base,
             "M_1x2": Ma, "M_gol": Ma, "M_es": Ma, "ancorata": True,
             "fonte": f"ancorata alle quote ({extra}, {src}){extra_src}",
-            "elo_c": elo_c, "elo_t": elo_t, "form_c": fc, "form_t": ft, "lh": lh, "la": la, "ritmo": _ritmo,
         }
-    Mg = pesi["gol"] * Mb + (1 - pesi["gol"]) * M_freq_live
-    Me = pesi["esatto"] * Mb + (1 - pesi["esatto"]) * M_freq_live
     return {
+        **base,
         "M_1x2": Mb, "M_gol": Mg, "M_es": Me, "ancorata": False,
         "fonte": (
             f"modello + frequenze + prior (Elo/forma/xG); peso modello "
             f"{pesi['gol']*100:.0f}% Goal/Over, {pesi['esatto']*100:.0f}% esatti"
             f"{extra_src} – nessuna quota bookmaker"
         ),
-        "elo_c": elo_c, "elo_t": elo_t, "form_c": fc, "form_t": ft, "lh": lh, "la": la, "ritmo": _ritmo,
     }
 
 
@@ -3437,6 +3444,87 @@ tab_calendario, tab_classifica, tab_value_finder, tab_ai_schedine, tab_monte_car
 ])
 
 
+
+def genera_commento_scheda(casa, trasf, syn, mk, mg, lh, la, ancorata: bool) -> str:
+    """
+    Riassunto testuale della partita a partire dai numeri del modello.
+    Non è un parere umano: è un commento automatico coerente con le %.
+    """
+    p1, px, p2 = float(mk["p1"]), float(mk["px"]), float(mk["p2"])
+    over = float(mg.get("over2.5", 0.5))
+    btts = float(mg.get("btts", 0.5))
+    tot = float(lh) + float(la)
+    segno = syn.get("segno", "X")
+    dc = syn.get("dc", "1X")
+    frasi = []
+
+    # Favorito / equilibrio
+    if syn.get("equilibrata") or segno == "X":
+        frasi.append(
+            f"**{casa} – {trasf}** appare **equilibrata**: 1 {p1*100:.0f}%, X {px*100:.0f}%, 2 {p2*100:.0f}%. "
+            "Il modello non vede un favorito netto; il pareggio resta in gioco."
+        )
+    elif segno == "1":
+        marg = p1 - max(px, p2)
+        tono = "netto" if marg > 0.15 else ("chiaro" if marg > 0.08 else "lieve")
+        frasi.append(
+            f"Il modello orienta verso **{casa} (1)** con vantaggio {tono} "
+            f"({p1*100:.0f}% vs X {px*100:.0f}% / 2 {p2*100:.0f}%)."
+        )
+    else:
+        marg = p2 - max(px, p1)
+        tono = "netto" if marg > 0.15 else ("chiaro" if marg > 0.08 else "lieve")
+        frasi.append(
+            f"Il modello orienta verso **{trasf} (2)** con vantaggio {tono} "
+            f"({p2*100:.0f}% vs X {px*100:.0f}% / 1 {p1*100:.0f}%)."
+        )
+
+    # Gol attesi e ritmo partita
+    if tot >= 3.1:
+        ritmo = "partita potenzialmente **aperta**"
+    elif tot <= 2.2:
+        ritmo = "partita potenzialmente **chiusa**"
+    else:
+        ritmo = "ritmo gol **nella media**"
+    frasi.append(
+        f"Gol attesi circa **{lh:.2f} – {la:.2f}** (totale ~{tot:.2f}): {ritmo}."
+    )
+
+    # Over / BTTS
+    pezzi = []
+    if over >= 0.58:
+        pezzi.append(f"Over 2.5 in evidenza ({over*100:.0f}%)")
+    elif over <= 0.42:
+        pezzi.append(f"Under 2.5 in evidenza ({(1-over)*100:.0f}%)")
+    else:
+        pezzi.append(f"Over 2.5 in bilico ({over*100:.0f}%)")
+    if btts >= 0.55:
+        pezzi.append(f"Goal sì più probabile ({btts*100:.0f}%)")
+    elif btts <= 0.42:
+        pezzi.append(f"No Goal più probabile ({(1-btts)*100:.0f}%)")
+    else:
+        pezzi.append(f"Goal/No Goal equilibrati ({btts*100:.0f}% BTTS)")
+    frasi.append(" · ".join(pezzi) + ".")
+
+    # Doppia chance
+    frasi.append(f"Doppia chance suggerita: **{dc}** ({float(syn.get('dc_p', 0))*100:.0f}%).")
+
+    # Fonte
+    if ancorata:
+        frasi.append("1X2 **ancorato alle quote book** (senza margine): più affidabile come riferimento di mercato.")
+    else:
+        frasi.append(
+            "Senza quote book: commento e % basati **solo sul modello** (Dixon-Coles + forma/Elo/xG). "
+            "Usare con cautela, non come value bet."
+        )
+
+    frasi.append(
+        "In sintesi da usare sul serio: **segno**, **doppia chance**, **Over 2.5** e **Goal**; "
+        "combo, multigol e risultato esatto restano indicativi."
+    )
+    return " ".join(frasi)
+
+
 def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""):
     d = distribuzione(casa, trasf)
     lh, la = gol_attesi(d["M_gol"])
@@ -3457,6 +3545,15 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
         unsafe_allow_html=True,
     )
 
+    # --- COMMENTO AUTOMATICO ---
+    try:
+        _commento = genera_commento_scheda(
+            casa, trasf, syn, mk, mg, lh, la, bool(d.get("ancorata")),
+        )
+        st.info("💬 **Commento modello** — " + _commento)
+    except Exception:
+        pass
+
     # --- PRONOSTICO PRINCIPALE (in cima) ---
     st.markdown("### 🎯 Pronostico principale")
     if not d["ancorata"]:
@@ -3471,6 +3568,61 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
     a1.metric("1 (Casa)", f"{mk['p1']*100:.1f}%", f"Equa: {1/mk['p1']:.2f}")
     a2.metric("X (Pareggio)", f"{mk['px']*100:.1f}%", f"Equa: {1/mk['px']:.2f}")
     a3.metric("2 (Trasferta)", f"{mk['p2']*100:.1f}%", f"Equa: {1/mk['p2']:.2f}")
+
+    # Confronto modello puro vs quote (se presenti)
+    try:
+        _Mp = d.get("M_puro")
+        if _Mp is not None:
+            _mk_p = mercati(_Mp)
+            _syn_p = sintesi_pronostico(_Mp)
+            if d.get("ancorata") and d.get("p_book") is not None:
+                _pb = d["p_book"]
+                st.markdown("#### 🔀 Confronto: modello vs quote")
+                st.caption(
+                    "Sinistra = solo modello (Dixon-Coles + Elo/forma/xG). "
+                    "Destra = 1X2 dalle quote senza margine (riferimento book). "
+                    "Il pronostico principale sopra usa le quote quando ci sono."
+                )
+                _tab = pd.DataFrame([
+                    {
+                        "Esito": "1 Casa",
+                        "Modello %": round(_mk_p["p1"] * 100, 1),
+                        "Quote %": round(float(_pb[0]) * 100, 1),
+                        "Δ (mod−quote)": round((_mk_p["p1"] - float(_pb[0])) * 100, 1),
+                    },
+                    {
+                        "Esito": "X",
+                        "Modello %": round(_mk_p["px"] * 100, 1),
+                        "Quote %": round(float(_pb[1]) * 100, 1),
+                        "Δ (mod−quote)": round((_mk_p["px"] - float(_pb[1])) * 100, 1),
+                    },
+                    {
+                        "Esito": "2 Trasferta",
+                        "Modello %": round(_mk_p["p2"] * 100, 1),
+                        "Quote %": round(float(_pb[2]) * 100, 1),
+                        "Δ (mod−quote)": round((_mk_p["p2"] - float(_pb[2])) * 100, 1),
+                    },
+                ])
+                st.dataframe(_tab, use_container_width=True, hide_index=True)
+                _s_mod = _syn_p.get("segno", "?")
+                _s_q = max(
+                    (("1", float(_pb[0])), ("X", float(_pb[1])), ("2", float(_pb[2]))),
+                    key=lambda t: t[1],
+                )[0]
+                if _s_mod == _s_q:
+                    st.success(f"Segno allineato: modello e quote indicano **{_s_mod}**.")
+                else:
+                    st.warning(
+                        f"Segno diverso: modello **{_s_mod}** · quote **{_s_q}**. "
+                        "In Scheda prevalgono le quote; il modello resta un secondo parere."
+                    )
+            else:
+                st.caption(
+                    f"Solo modello (nessuna quota): 1 {_mk_p['p1']*100:.0f}% · "
+                    f"X {_mk_p['px']*100:.0f}% · 2 {_mk_p['p2']*100:.0f}%."
+                )
+    except Exception:
+        pass
     if syn.get("calib"):
         st.caption(
             f"1X2 calibrato su {cal['n']} partite passate: la percentuale è più vicina a quante volte è uscito davvero. "
