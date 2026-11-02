@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.37
+# Combo Master Grook — v4.38
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.37</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.38</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -2540,6 +2540,73 @@ def backtest_cached(div, ridge, halflife, passo, giorno, chiave: str = "", full_
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner="Calibro le percentuali sul passato...")
+
+def backtest_tutti_campionati(giorno: str, chiave: str = "", passo: int = 28):
+    """DC vs stack live su tutti i campionati. Ritorna DataFrame riassuntivo."""
+    rows = []
+    for nome, codice in LEAGUES.items():
+        try:
+            df = carica_storico(codice, N_STAGIONI, giorno, chiave)
+            if df is None or len(df) < 200:
+                rows.append({
+                    "Campionato": nome, "Codice": codice, "n": 0,
+                    "LL_DC": None, "Brier_DC": None,
+                    "LL_full": None, "Brier_full": None, "delta_LL": None,
+                    "Nota": "dati insufficienti",
+                })
+                continue
+            par = parametri_auto(codice, giorno, chiave)
+            ridge, hl = par["ridge"], par["halflife"]
+            elo_map, xg_map = {}, {}
+            try:
+                df_elo = carica_clubelo(giorno)
+                squadre = sorted(set(df["HomeTeam"]) | set(df["AwayTeam"]))
+                elo_map = mappa_elo(squadre, df_elo) if df_elo is not None else {}
+            except Exception:
+                pass
+            try:
+                df_xg = carica_understat_csv(giorno)
+                squadre = sorted(set(df["HomeTeam"]) | set(df["AwayTeam"]))
+                xg_map = mappa_understat(squadre, df_xg) if df_xg is not None else {}
+            except Exception:
+                pass
+            bt_dc = esegui_backtest_df(df, ridge, hl, True, passo, full_stack=False)
+            bt_full = esegui_backtest_df(
+                df, ridge, hl, True, passo,
+                full_stack=True, elo_map=elo_map, xg_map=xg_map,
+            )
+            if bt_dc is None or bt_dc.empty or bt_full is None or bt_full.empty:
+                rows.append({
+                    "Campionato": nome, "Codice": codice, "n": 0,
+                    "LL_DC": None, "Brier_DC": None,
+                    "LL_full": None, "Brier_full": None, "delta_LL": None,
+                    "Nota": "backtest vuoto",
+                })
+                continue
+            m1 = metriche_backtest(bt_dc)
+            m2 = metriche_backtest(bt_full)
+            d_ll = m2["modello"][0] - m1["modello"][0]
+            rows.append({
+                "Campionato": nome,
+                "Codice": codice,
+                "n": m1["n"],
+                "LL_DC": round(m1["modello"][0], 4),
+                "Brier_DC": round(m1["modello"][1], 4),
+                "LL_full": round(m2["modello"][0], 4),
+                "Brier_full": round(m2["modello"][1], 4),
+                "delta_LL": round(d_ll, 4),
+                "Nota": "full meglio" if d_ll < -0.002 else ("DC meglio" if d_ll > 0.002 else "pari"),
+            })
+        except Exception as e:
+            rows.append({
+                "Campionato": nome, "Codice": codice, "n": 0,
+                "LL_DC": None, "Brier_DC": None,
+                "LL_full": None, "Brier_full": None, "delta_LL": None,
+                "Nota": "errore: " + type(e).__name__,
+            })
+    return pd.DataFrame(rows)
+
+
 def calibrazione_live(div, ridge, halflife, giorno, chiave: str = ""):
     """Un walk-forward (passo 28 giorni) per riallineare le % a quello che è successo davvero."""
     df = carica_storico(div, N_STAGIONI, giorno, chiave)
@@ -4033,6 +4100,45 @@ with tab_backtest:
             st.session_state["bt"] = st.session_state["bt_full"]
             st.session_state["bt_div"] = div
             st.session_state["bt_mode"] = "compare"
+
+    if st.button("🌍 Backtest TUTTI i campionati (DC vs stack live)"):
+        with st.spinner("Backtest su tutti i campionati: può richiedere diversi minuti..."):
+            st.session_state["bt_all"] = backtest_tutti_campionati(giorno, chiave_api, passo=28)
+            st.session_state["bt_mode"] = "all_leagues"
+
+    if st.session_state.get("bt_mode") == "all_leagues":
+        tall = st.session_state.get("bt_all")
+        if tall is not None and not tall.empty:
+            st.markdown("#### 🌍 DC vs stack live · tutti i campionati")
+            st.caption(
+                "delta_LL = LL_full − LL_DC (negativo = stack live migliore). "
+                "Passo 28 giorni. Elo = snapshot attuale."
+            )
+            st.dataframe(tall, use_container_width=True, hide_index=True)
+            ok = tall.dropna(subset=["delta_LL"])
+            if not ok.empty:
+                meglio_full = int((ok["delta_LL"] < -0.002).sum())
+                meglio_dc = int((ok["delta_LL"] > 0.002).sum())
+                pari = int((ok["delta_LL"].abs() <= 0.002).sum())
+                media = float(ok["delta_LL"].mean())
+                st.success(
+                    f"Sintesi: stack live meglio su **{meglio_full}** leghe · "
+                    f"DC meglio su **{meglio_dc}** · pari **{pari}** · "
+                    f"media delta_LL = `{media:+.4f}`"
+                )
+                with st.expander("Copia report per analisi"):
+                    lines = [
+                        "REPORT BACKTEST TUTTI I CAMPIONATI (Combo Master Grook)",
+                        "giorno=" + str(giorno) + " passo=28",
+                        "Campionato | n | LL_DC | LL_full | delta_LL | Nota",
+                    ]
+                    for _, r in tall.iterrows():
+                        lines.append(
+                            str(r["Campionato"]) + " | " + str(r["n"]) + " | "
+                            + str(r["LL_DC"]) + " | " + str(r["LL_full"]) + " | "
+                            + str(r["delta_LL"]) + " | " + str(r["Nota"])
+                        )
+                    st.code('\n'.join(lines))
 
     if st.session_state.get("bt_mode") == "compare":
         b1 = st.session_state.get("bt_dc")
