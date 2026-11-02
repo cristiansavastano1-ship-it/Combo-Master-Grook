@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.36
+# Combo Master Grook — v4.37
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.36</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.37</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -2305,22 +2305,46 @@ def prob_calibrata(p, cal, chiave):
 
 
 # ======================= BACKTEST 1X2 =======================
-def esegui_backtest_df(df, ridge, halflife, usa_dc, passo):
+def _lambda_stack_live(m, casa, trasf, elo_map, form_map, xg_map, train_df, full_stack: bool):
+    """full_stack=False: solo DC. True: Elo+forma+xG+ritmo come Scheda."""
+    if not full_stack:
+        return lambda_partita(m, casa, trasf)
+    lh, la, _, _, _, _ = lambda_full(m, casa, trasf, elo_map or {}, form_map or {})
+    if xg_map and XG_BLEND > 0 and (casa in xg_map or trasf in xg_map):
+        fxg_h, fxg_a = fattore_xg(xg_map, casa, trasf)
+        lh, la = lh * (fxg_h ** XG_BLEND), la * (fxg_a ** XG_BLEND)
+    if train_df is not None and RITMO_BLEND > 0:
+        _ritmo = fattore_ritmo_lega(train_df)
+        if abs(_ritmo - 1.0) > 0.01:
+            f = float(_ritmo) ** RITMO_BLEND
+            lh, la = lh * f, la * f
+    return lh, la
+
+
+def esegui_backtest_df(df, ridge, halflife, usa_dc, passo, full_stack: bool = False,
+                       elo_map=None, xg_map=None):
+    """Walk-forward. full_stack allinea il backtest allo stack live della Scheda."""
     stagioni = sorted(df["Stag"].unique())
     if len(stagioni) < 2:
         return pd.DataFrame()
     t = df.loc[df["Stag"] == stagioni[1], "Date"].min()
     fine = df["Date"].max()
     righe = []
+    elo_map = elo_map or {}
+    xg_map = xg_map or {}
     while t <= fine:
         blocco = df[(df["Date"] >= t) & (df["Date"] < t + pd.Timedelta(days=passo))]
         train = df[df["Date"] < t]
         if len(blocco) and len(train) >= 150:
             m = adatta_modello(train, t, ridge, halflife, usa_dc)
+            form_map = forma_recente(train, FORM_N) if full_stack else {}
             esiti_tr = np.where(train["FTHG"] > train["FTAG"], 0, np.where(train["FTHG"] == train["FTAG"], 1, 2))
             freq = np.bincount(esiti_tr, minlength=3) / len(esiti_tr)
             for _, r in blocco.iterrows():
-                lh, la = lambda_partita(m, r["HomeTeam"], r["AwayTeam"])
+                lh, la = _lambda_stack_live(
+                    m, r["HomeTeam"], r["AwayTeam"],
+                    elo_map, form_map, xg_map, train, full_stack,
+                )
                 mk = mercati(matrice_punteggi(lh, la, m["rho"]))
                 esito = 0 if r["FTHG"] > r["FTAG"] else (1 if r["FTHG"] == r["FTAG"] else 2)
                 qp, qc = prima_tripla(r, COL_PRESA), prima_tripla(r, COL_CHIUSURA)
@@ -2334,6 +2358,7 @@ def esegui_backtest_df(df, ridge, halflife, usa_dc, passo):
                     "f1": freq[0], "fx": freq[1], "f2": freq[2],
                     "q1": qp[0] if qp else np.nan, "qx": qp[1] if qp else np.nan, "q2": qp[2] if qp else np.nan,
                     "m1": pm[0], "mx": pm[1], "m2": pm[2],
+                    "stack": "full" if full_stack else "dc",
                 })
         t += pd.Timedelta(days=passo)
     return pd.DataFrame(righe)
@@ -2490,9 +2515,28 @@ def modello_corrente(div, ridge, halflife, giorno, chiave: str = ""):
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
-def backtest_cached(div, ridge, halflife, passo, giorno, chiave: str = ""):
+def backtest_cached(div, ridge, halflife, passo, giorno, chiave: str = "", full_stack: bool = False):
     df = carica_storico(div, N_STAGIONI, giorno, chiave)
-    return None if df is None else esegui_backtest_df(df, ridge, halflife, True, passo)
+    if df is None:
+        return None
+    elo_map, xg_map = {}, {}
+    if full_stack:
+        try:
+            df_elo = carica_clubelo(giorno)
+            squadre = sorted(set(df["HomeTeam"]) | set(df["AwayTeam"]))
+            elo_map = mappa_elo(squadre, df_elo) if df_elo is not None else {}
+        except Exception:
+            elo_map = {}
+        try:
+            df_xg = carica_understat_csv(giorno)
+            squadre = sorted(set(df["HomeTeam"]) | set(df["AwayTeam"]))
+            xg_map = mappa_understat(squadre, df_xg) if df_xg is not None else {}
+        except Exception:
+            xg_map = {}
+    return esegui_backtest_df(
+        df, ridge, halflife, True, passo,
+        full_stack=full_stack, elo_map=elo_map, xg_map=xg_map,
+    )
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner="Calibro le percentuali sul passato...")
@@ -3941,7 +3985,8 @@ with tab_backtest:
     st.subheader("🧪 Backtest walk-forward")
     st.caption(
         "Ogni blocco di partite è previsto da un modello addestrato solo sul passato. "
-        "Confronto con frequenze storiche e quote di chiusura senza margine."
+        "Confronto con frequenze storiche e quote di chiusura senza margine. "
+        "Il tune ridge/emivita resta su solo DC; lo stack live si valuta a parte."
     )
     if par["auto"]:
         hl_txt = par["halflife"] if par["halflife"] else "nessun decadimento"
@@ -3956,15 +4001,81 @@ with tab_backtest:
                 "il log-loss sull'ultima stagione non usata per la griglia."
             )
 
-    if st.button("🚀 Esegui Backtest"):
-        with st.spinner("Calcolo in corso..."):
-            st.session_state["bt"] = backtest_cached(div, par["ridge"], par["halflife"], PASSO_BACKTEST, giorno, chiave_api)
+    st.caption(
+        "Due modalità: **Solo DC** (come il tune dei parametri) e **Stack live** "
+        "(Elo+forma+xG+ritmo, stesso percorso della Scheda). Confronto onesto."
+    )
+    c_bt1, c_bt2 = st.columns(2)
+    with c_bt1:
+        if st.button("🚀 Backtest solo Dixon-Coles"):
+            with st.spinner("Backtest DC..."):
+                st.session_state["bt"] = backtest_cached(
+                    div, par["ridge"], par["halflife"], PASSO_BACKTEST, giorno, chiave_api, False,
+                )
+                st.session_state["bt_div"] = div
+                st.session_state["bt_mode"] = "dc"
+    with c_bt2:
+        if st.button("🚀 Backtest stack live (Elo+xG+…)"):
+            with st.spinner("Backtest stack live (più lento)..."):
+                st.session_state["bt"] = backtest_cached(
+                    div, par["ridge"], par["halflife"], PASSO_BACKTEST, giorno, chiave_api, True,
+                )
+                st.session_state["bt_div"] = div
+                st.session_state["bt_mode"] = "full"
+    if st.button("⚖️ Confronta DC vs stack live"):
+        with st.spinner("Eseguo entrambi i backtest..."):
+            st.session_state["bt_dc"] = backtest_cached(
+                div, par["ridge"], par["halflife"], PASSO_BACKTEST, giorno, chiave_api, False,
+            )
+            st.session_state["bt_full"] = backtest_cached(
+                div, par["ridge"], par["halflife"], PASSO_BACKTEST, giorno, chiave_api, True,
+            )
+            st.session_state["bt"] = st.session_state["bt_full"]
             st.session_state["bt_div"] = div
+            st.session_state["bt_mode"] = "compare"
+
+    if st.session_state.get("bt_mode") == "compare":
+        b1 = st.session_state.get("bt_dc")
+        b2 = st.session_state.get("bt_full")
+        if b1 is not None and b2 is not None and not b1.empty and not b2.empty:
+            m1, m2 = metriche_backtest(b1), metriche_backtest(b2)
+            st.markdown("#### ⚖️ Confronto DC vs stack live")
+            conf = pd.DataFrame([
+                {
+                    "Modello": "Solo Dixon-Coles",
+                    "n": m1["n"],
+                    "Log loss": round(m1["modello"][0], 4),
+                    "Brier": round(m1["modello"][1], 4),
+                },
+                {
+                    "Modello": "Stack live (Elo+forma+xG+ritmo)",
+                    "n": m2["n"],
+                    "Log loss": round(m2["modello"][0], 4),
+                    "Brier": round(m2["modello"][1], 4),
+                },
+            ])
+            if "mercato" in m1 and "mercato" in m2:
+                conf.loc[0, "LL mercato"] = round(m1["mercato"][0], 4)
+                conf.loc[1, "LL mercato"] = round(m2["mercato"][0], 4)
+            st.dataframe(conf, use_container_width=True, hide_index=True)
+            d_ll = m2["modello"][0] - m1["modello"][0]
+            if d_ll < -0.002:
+                st.success(f"Stack live migliore di DC sul log-loss ({d_ll:+.4f}).")
+            elif d_ll > 0.002:
+                st.warning(f"Stack live peggiore di DC sul log-loss ({d_ll:+.4f}). I blend non aiutano su questo campione.")
+            else:
+                st.info(f"Differenza minima sul log-loss ({d_ll:+.4f}).")
+            st.caption(
+                "Elo in backtest = snapshot attuale (non storico giorno-per-giorno): "
+                "vantaggio leggero non realistico sulle stagioni vecchie."
+            )
 
     bt = st.session_state.get("bt") if st.session_state.get("bt_div") == div else None
     if bt is not None and not bt.empty:
+        _mode = st.session_state.get("bt_mode", "dc")
+        _lab = "stack live" if _mode in ("full", "compare") else "solo Dixon-Coles"
         mt = metriche_backtest(bt)
-        st.markdown(f"#### 📏 Qualità probabilità 1X2 ({mt['n']} partite)")
+        st.markdown(f"#### 📏 Qualità probabilità 1X2 ({mt['n']} partite · {_lab})")
         r1, r2, r3 = st.columns(3)
         r1.metric("Log loss modello", f"{mt['modello'][0]:.4f}", f"Brier {mt['modello'][1]:.4f}", delta_color="off")
         r2.metric("Log loss frequenze", f"{mt['frequenze'][0]:.4f}", f"Brier {mt['frequenze'][1]:.4f}", delta_color="off")
