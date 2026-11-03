@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.40
+# Combo Master Grook — v4.41
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.40</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.41</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -2417,6 +2417,145 @@ def tabella_scommesse(bt, soglie=(0, 2, 5, 8, 10)):
     return pd.DataFrame(righe)
 
 
+
+def metriche_bankroll(bt, edge_min_pct: float = 0.0, allinea_chiusura: bool = True):
+    """
+    1 unità sull'esito 1X2 con edge modello massimo, se edge >= soglia.
+    Se allinea_chiusura: solo se il max del modello coincide col max delle quote di chiusura
+    (o di apertura se chiusura manca).
+    Ritorna dict n, vinte_pct, roi_pct, se_roi, clv_pct (o None se n=0).
+    """
+    if bt is None or bt.empty:
+        return {"n": 0}
+    need = ["p1", "px", "p2", "q1", "qx", "q2", "y"]
+    if not all(c in bt.columns for c in need):
+        return {"n": 0}
+    b = bt.dropna(subset=["q1", "qx", "q2"]).copy()
+    if b.empty:
+        return {"n": 0}
+    P = b[["p1", "px", "p2"]].to_numpy(float)
+    Q = b[["q1", "qx", "q2"]].to_numpy(float)
+    y = b["y"].to_numpy(int)
+    edge = P * Q - 1.0
+    k = edge.argmax(axis=1)
+    e_best = edge[np.arange(len(b)), k]
+    sel = e_best >= (edge_min_pct / 100.0)
+    if allinea_chiusura:
+        # preferisci chiusura; fallback apertura
+        has_m = b[["m1", "mx", "m2"]].notna().all(axis=1).to_numpy() if all(
+            c in b.columns for c in ("m1", "mx", "m2")
+        ) else np.zeros(len(b), dtype=bool)
+        M = np.where(
+            has_m[:, None],
+            b[["m1", "mx", "m2"]].to_numpy(float) if has_m.any() else Q,
+            Q,
+        )
+        # if m columns exist use them where valid
+        if all(c in b.columns for c in ("m1", "mx", "m2")):
+            Mm = b[["m1", "mx", "m2"]].to_numpy(float)
+            M = np.where(np.isfinite(Mm), Mm, Q)
+            # row-wise: if any nan in m, use Q
+            bad = ~np.isfinite(Mm).all(axis=1)
+            M[bad] = Q[bad]
+        else:
+            M = Q
+        k_mkt = M.argmax(axis=1)
+        sel = sel & (k == k_mkt)
+    n = int(sel.sum())
+    if n == 0:
+        return {"n": 0, "vinte_pct": None, "roi_pct": None, "se_roi": None, "clv_pct": None}
+    q_k = Q[np.arange(len(b)), k][sel]
+    profitto = np.where(y[sel] == k[sel], q_k - 1.0, -1.0)
+    # CLV vs chiusura se c'è
+    clv_vals = []
+    if all(c in b.columns for c in ("m1", "mx", "m2")):
+        Mm = b[["m1", "mx", "m2"]].to_numpy(float)
+        for irow in np.where(sel)[0]:
+            kk = int(k[irow])
+            if np.isfinite(Mm[irow, kk]) and Mm[irow, kk] > 0:
+                clv_vals.append(float(Q[irow, kk] * Mm[irow, kk] - 1.0))
+    roi = float(np.mean(profitto))
+    se = float(np.std(profitto, ddof=1) / math.sqrt(n)) if n > 1 else None
+    return {
+        "n": n,
+        "vinte_pct": round(float((y[sel] == k[sel]).mean() * 100), 1),
+        "roi_pct": round(roi * 100, 1),
+        "se_roi": round(se * 100, 1) if se is not None else None,
+        "clv_pct": round(float(np.mean(clv_vals)) * 100, 1) if clv_vals else None,
+    }
+
+
+def bankroll_tutti_campionati(giorno: str, chiave: str = "", passo: int = 28, edge_min: float = 0.0):
+    """
+    Walk-forward bankroll 1 u su tutti i campionati.
+    Regola: max edge 1X2, edge >= edge_min, allineato al book di chiusura (se c'è).
+    Stack = full (come Scheda). Solo partite con quote di apertura.
+    """
+    rows = []
+    for nome, codice in LEAGUES.items():
+        try:
+            df = carica_storico(codice, N_STAGIONI, giorno, chiave)
+            if df is None or len(df) < 200:
+                rows.append({
+                    "Campionato": nome, "Codice": codice, "n": 0,
+                    "Vinte %": None, "ROI %": None, "± ROI %": None, "CLV %": None,
+                    "Nota": "dati insufficienti",
+                })
+                continue
+            par = parametri_auto(codice, giorno, chiave)
+            ridge, hl = par["ridge"], par["halflife"]
+            elo_map, xg_map = {}, {}
+            try:
+                df_elo = carica_clubelo(giorno)
+                squadre = sorted(set(df["HomeTeam"]) | set(df["AwayTeam"]))
+                elo_map = mappa_elo(squadre, df_elo) if df_elo is not None else {}
+            except Exception:
+                pass
+            try:
+                df_xg = carica_understat_csv(giorno)
+                squadre = sorted(set(df["HomeTeam"]) | set(df["AwayTeam"]))
+                xg_map = mappa_understat(squadre, df_xg) if df_xg is not None else {}
+            except Exception:
+                pass
+            bt = esegui_backtest_df(
+                df, ridge, hl, True, passo,
+                full_stack=True, elo_map=elo_map, xg_map=xg_map,
+            )
+            if bt is None or bt.empty:
+                rows.append({
+                    "Campionato": nome, "Codice": codice, "n": 0,
+                    "Vinte %": None, "ROI %": None, "± ROI %": None, "CLV %": None,
+                    "Nota": "backtest vuoto",
+                })
+                continue
+            m0 = metriche_bankroll(bt, edge_min_pct=edge_min, allinea_chiusura=True)
+            if m0["n"] == 0:
+                rows.append({
+                    "Campionato": nome, "Codice": codice, "n": 0,
+                    "Vinte %": None, "ROI %": None, "± ROI %": None, "CLV %": None,
+                    "Nota": "0 pick (serve quote)",
+                })
+                continue
+            rows.append({
+                "Campionato": nome,
+                "Codice": codice,
+                "n": m0["n"],
+                "Vinte %": m0["vinte_pct"],
+                "ROI %": m0["roi_pct"],
+                "± ROI %": m0["se_roi"],
+                "CLV %": m0["clv_pct"],
+                "Nota": "ok",
+            })
+        except Exception as e:
+            rows.append({
+                "Campionato": nome, "Codice": codice, "n": 0,
+                "Vinte %": None, "ROI %": None, "± ROI %": None, "CLV %": None,
+                "Nota": "errore: " + type(e).__name__,
+            })
+    return pd.DataFrame(rows)
+
+
+
 def tabella_calibrazione(bt, bins=10):
     P = bt[["p1", "px", "p2"]].to_numpy().ravel()
     O = np.eye(3)[bt["y"].to_numpy(int)].ravel()
@@ -4252,6 +4391,47 @@ with tab_backtest:
             st.session_state["bt"] = st.session_state["bt_full"]
             st.session_state["bt_div"] = div
             st.session_state["bt_mode"] = "compare"
+
+    
+    if st.button("💰 Bankroll TUTTI i campionati (1 u, allineato al book)"):
+        with st.spinner("Bankroll walk-forward su tutte le leghe (può richiedere diversi minuti)..."):
+            st.session_state["bt_bank"] = bankroll_tutti_campionati(giorno, chiave_api, passo=28, edge_min=0.0)
+            st.session_state["bt_mode"] = "bankroll_all"
+
+    if st.session_state.get("bt_mode") == "bankroll_all":
+        tb = st.session_state.get("bt_bank")
+        if tb is not None and not tb.empty:
+            st.markdown("#### 💰 Bankroll · tutti i campionati")
+            st.caption(
+                "Regola: 1 unità sull'esito 1X2 con edge modello massimo, "
+                "solo se edge ≥ 0 e segno allineato al book di chiusura (se manca, apertura). "
+                "Stack live. Serve la quota di apertura nello storico."
+            )
+            st.dataframe(tb, use_container_width=True, hide_index=True)
+            ok = tb[tb["n"] > 0].copy()
+            if not ok.empty:
+                # ROI medio pesato
+                w = ok["n"].astype(float)
+                roi_w = float((ok["ROI %"].astype(float) * w).sum() / w.sum())
+                n_tot = int(ok["n"].sum())
+                st.success(
+                    f"Pick totali **{n_tot}** · ROI medio pesato **{roi_w:+.1f}%** · "
+                    f"leghe con pick: {len(ok)}"
+                )
+                with st.expander("Copia report bankroll"):
+                    lines = [
+                        "REPORT BANKROLL TUTTI I CAMPIONATI (Combo Master Grook)",
+                        "regola: edge>=0, allineato chiusura, 1u, stack live, passo=28",
+                        "Campionato | n | Vinte% | ROI% | ±ROI% | CLV% | Nota",
+                    ]
+                    for _, r in tb.iterrows():
+                        lines.append(
+                            str(r["Campionato"]) + " | " + str(r["n"]) + " | "
+                            + str(r["Vinte %"]) + " | " + str(r["ROI %"]) + " | "
+                            + str(r["± ROI %"]) + " | " + str(r["CLV %"]) + " | "
+                            + str(r["Nota"])
+                        )
+                    st.code('\n'.join(lines))
 
     if st.button("🌍 Backtest TUTTI i campionati (DC vs stack live)"):
         with st.spinner("Backtest su tutti i campionati: può richiedere diversi minuti..."):
