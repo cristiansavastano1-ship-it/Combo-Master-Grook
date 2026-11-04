@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.41
+# Combo Master Grook — v4.42
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.41</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.42</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -201,6 +201,8 @@ API_CODICI = {
 }
 # Divisione europee: niente CSV su football-data.co.uk → storico da football-data.org
 EURO_DIVS = {"CL", "EL"}
+LEGHE_VIA_MEZZO = {"I1", "E0", "SP1", "D1", "F1", "N1", "P1"}
+
 # ID leghe API-Football (api-sports.io) — free tier: 100 req/giorno
 API_FOOTBALL_LEAGUE_ID = {
     "I1": 135,   # Serie A
@@ -3584,6 +3586,63 @@ tab_calendario, tab_classifica, tab_value_finder, tab_ai_schedine, tab_monte_car
 
 
 
+
+def consiglio_cosa_giocare(div_sel, syn, mk, mg, ancorata, p_book=None, segno_quote=None):
+    """Via di mezzo: GIOCA o SOLO STUDIO. Non promette edge."""
+    div = (div_sel or "").strip()
+    segno = syn.get("segno", "X")
+    p_segno = {"1": syn.get("p1"), "X": syn.get("px"), "2": syn.get("p2")}.get(segno)
+    try:
+        p_segno = float(p_segno or 0)
+    except Exception:
+        p_segno = 0.0
+    dc = syn.get("dc", "1X")
+    dc_p = float(syn.get("dc_p") or 0)
+    over = float(mg.get("over2.5", 0.5))
+    under = 1.0 - over
+
+    if not ancorata or p_book is None:
+        return {
+            "azione": "STUDIO",
+            "testo": "NON GIOCARE — nessuna quota book. Solo orientamento modello.",
+        }
+    if div and div not in LEGHE_VIA_MEZZO and div not in EURO_DIVS:
+        return {
+            "azione": "STUDIO",
+            "testo": "NON GIOCARE — lega fuori dalla lista via di mezzo (top leghe / CL-EL).",
+        }
+    if segno_quote is None:
+        try:
+            segno_quote = max(
+                (("1", float(p_book[0])), ("X", float(p_book[1])), ("2", float(p_book[2]))),
+                key=lambda t: t[1],
+            )[0]
+        except Exception:
+            segno_quote = segno
+    if segno != segno_quote:
+        return {
+            "azione": "STUDIO",
+            "testo": "NON GIOCARE — modello %s e quote %s non allineati." % (segno, segno_quote),
+        }
+    if p_segno < 0.45 and dc_p >= 0.70:
+        pick = "Doppia chance %s (~%.0f%%)" % (dc, dc_p * 100)
+        livello = "medio"
+    else:
+        lab = {"1": "1 Casa", "X": "X Pareggio", "2": "2 Trasferta"}.get(segno, segno)
+        equa = (1.0 / p_segno) if p_segno > 0.05 else 0
+        pick = "%s (~%.0f%%, equa %.2f)" % (lab, p_segno * 100, equa)
+        livello = "alto" if p_segno >= 0.55 else "medio"
+    extra = ""
+    if over >= 0.60:
+        extra = " | Secondario: Over 2.5 (~%.0f%%), stake minore" % (over * 100)
+    elif under >= 0.60:
+        extra = " | Secondario: Under 2.5 (~%.0f%%), stake minore" % (under * 100)
+    return {
+        "azione": "GIOCA",
+        "testo": "GIOCA: %s%s | Stake basso fisso (0.5-1%% bankroll). Livello %s. Non e value garantito." % (pick, extra, livello),
+    }
+
+
 def genera_commento_scheda(casa, trasf, syn, mk, mg, lh, la, ancorata: bool) -> str:
     """
     Riassunto testuale della partita a partire dai numeri del modello.
@@ -3760,6 +3819,26 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
                     f"Solo modello (nessuna quota): 1 {_mk_p['p1']*100:.0f}% · "
                     f"X {_mk_p['px']*100:.0f}% · 2 {_mk_p['p2']*100:.0f}%."
                 )
+    except Exception:
+        pass
+
+    try:
+        _pb = d.get("p_book")
+        _sq = None
+        if _pb is not None:
+            try:
+                _sq = max(
+                    (("1", float(_pb[0])), ("X", float(_pb[1])), ("2", float(_pb[2]))),
+                    key=lambda t: t[1],
+                )[0]
+            except Exception:
+                _sq = None
+        _cg = consiglio_cosa_giocare(div_sel, syn, mk, mg, bool(d.get("ancorata")), _pb, _sq)
+        st.markdown("### 🎲 Cosa giocare")
+        if _cg.get("azione") == "GIOCA":
+            st.success(_cg.get("testo", "GIOCA"))
+        else:
+            st.warning(_cg.get("testo", "NON GIOCARE — solo studio"))
     except Exception:
         pass
     if syn.get("calib"):
