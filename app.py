@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.42
+# Combo Master Grook — v4.43
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.42</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.43</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -321,20 +321,39 @@ def scarica_odds_the_odds_api(div: str, api_key: str, giorno: str):
     if not _odds_api_can_spend(2):
         return {}
     sport = ODDS_API_SPORT[div]
-    try:
-        r = requests.get(
-            f"{ODDS_API_BASE}/sports/{sport}/odds",
-            params={
-                "apiKey": api_key,
-                "regions": "eu",
-                "markets": "h2h,totals",
-                "oddsFormat": "decimal",
-            },
-            timeout=20,
-        )
-    except Exception as e:
+    # CL/EL: prova eu e uk (book diversi); altre leghe solo eu
+    regions_try = ["eu", "uk"] if div in ("CL", "EL") else ["eu"]
+    r = None
+    last_exc = None
+    for reg in regions_try:
+        if not _odds_api_can_spend(2):
+            break
+        try:
+            cand = requests.get(
+                f"{ODDS_API_BASE}/sports/{sport}/odds",
+                params={
+                    "apiKey": api_key,
+                    "regions": reg,
+                    "markets": "h2h,totals",
+                    "oddsFormat": "decimal",
+                },
+                timeout=22,
+            )
+        except Exception as e:
+            last_exc = e
+            continue
+        r = cand
+        if cand.status_code == 200:
+            try:
+                data = cand.json()
+                if isinstance(data, list) and len(data) > 0:
+                    break
+            except Exception:
+                pass
+    if r is None:
         b = _odds_api_load_budget()
-        _odds_api_save_budget(b["usati"], b["remaining"], str(e)[:80])
+        msg = str(last_exc)[:80] if last_exc else "odds request fail"
+        _odds_api_save_budget(b["usati"], b["remaining"], msg)
         return {}
 
     # aggiorna budget da header
@@ -448,13 +467,20 @@ def _match_quote_odds_api(api_map, casa, trasf):
         return api_map[(nc, nt)]
     if (casa, trasf) in api_map:
         return api_map[(casa, trasf)]
-    # fuzzy
+    # fuzzy — soglia più bassa per nomi UEFA lunghi (Bayern Munich vs Bayern, etc.)
+    best, best_s = None, 0.0
     for (h, a), val in api_map.items():
         if not isinstance(h, str):
             continue
         hn, an = _norm_sq(h), _norm_sq(a)
-        if _similarita(hn, nc) >= 0.78 and _similarita(an, nt) >= 0.78:
+        s = 0.5 * (_similarita(hn, nc) + _similarita(an, nt))
+        # anche token: se una parola chiave coincide (inter, bayern, psg...)
+        if s > best_s:
+            best_s, best = s, val
+        if _similarita(hn, nc) >= 0.72 and _similarita(an, nt) >= 0.72:
             return val
+    if best is not None and best_s >= 0.70:
+        return best
     return None
 
 
@@ -1322,7 +1348,7 @@ def scarica_odds_api_football(div: str, api_key: str, giorno: str):
     headers = _api_headers(api_key)
     out = {}
     try:
-        for fx in fixtures[:8]:
+        for fx in fixtures[:(15 if div in ("CL", "EL") else 8)]:
             fid, home, away = fx["fid"], fx["home"], fx["away"]
             try:
                 ro = requests.get(
@@ -3359,6 +3385,12 @@ if _ko and div in ODDS_API_SPORT and _odds_api_can_spend(2):
         _b2 = _odds_api_load_budget()
         st.sidebar.caption(
             f"Odds API: {len(odds_api_map)} eventi · rimanenti ~{_b2['remaining']}"
+        )
+    elif _ko and div in ("CL", "EL") and not odds_api_map:
+        st.sidebar.warning(
+            "Champions/EL: Odds API senza eventi. "
+            "Verifica chiave, crediti, e che ci siano match nei prossimi giorni. "
+            "Poi prova API-Football."
         )
 elif _ko and not _odds_api_can_spend(2):
     st.sidebar.warning(
