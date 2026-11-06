@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.50
+# Combo Master Grook — v4.51
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.50</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.51</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -3779,34 +3779,79 @@ def genera_commento_scheda(casa, trasf, syn, mk, mg, lh, la, ancorata: bool) -> 
 
 
 
-def stat_tempi_da_storico(df):
-    """Share gol 1T + medie da HTHG/HTAG. None se insufficiente."""
+def stat_tempi_da_storico(df, n_rec: int = 100, n_long: int = 400):
+    """
+    Share gol 1T + medie da HTHG/HTAG, pesate sul **recente**.
+    - ultime n_rec partite: ritmo tempi attuale (lega più golosa → meno 0-0)
+    - blend con finestra lunga per non oscillare troppo
+    """
     if df is None or df.empty or not {"HTHG", "HTAG", "FTHG", "FTAG"}.issubset(df.columns):
         return None
     d = df.dropna(subset=["HTHG", "HTAG", "FTHG", "FTAG"]).copy()
     for c in ("HTHG", "HTAG", "FTHG", "FTAG"):
         d[c] = pd.to_numeric(d[c], errors="coerce")
     d = d.dropna(subset=["HTHG", "HTAG", "FTHG", "FTAG"])
+    if "Date" in d.columns:
+        d = d.sort_values("Date")
     d["SHHG"] = d["FTHG"] - d["HTHG"]
     d["SHAG"] = d["FTAG"] - d["HTAG"]
     d = d[(d["SHHG"] >= 0) & (d["SHAG"] >= 0)]
-    if len(d) < 60:
+    if len(d) < 50:
         return None
-    gol_1 = float((d["HTHG"] + d["HTAG"]).sum())
-    gol_ft = float((d["FTHG"] + d["FTAG"]).sum())
-    if gol_ft <= 0:
+
+    def _stats(sub):
+        if sub is None or len(sub) < 20:
+            return None
+        g1 = float((sub["HTHG"] + sub["HTAG"]).sum())
+        gft = float((sub["FTHG"] + sub["FTAG"]).sum())
+        if gft <= 0:
+            return None
+        return {
+            "n": int(len(sub)),
+            "share_1": float(np.clip(g1 / gft, 0.25, 0.50)),
+            "m_hthg": float(sub["HTHG"].mean()),
+            "m_htag": float(sub["HTAG"].mean()),
+            "m_shhg": float(sub["SHHG"].mean()),
+            "m_shag": float(sub["SHAG"].mean()),
+            "p00_1": float(((sub["HTHG"] == 0) & (sub["HTAG"] == 0)).mean()),
+            "p00_2": float(((sub["SHHG"] == 0) & (sub["SHAG"] == 0)).mean()),
+            "gol_1t": float((sub["HTHG"] + sub["HTAG"]).mean()),
+            "gol_2t": float((sub["SHHG"] + sub["SHAG"]).mean()),
+        }
+
+    rec = d.tail(min(n_rec, len(d)))
+    long = d.tail(min(max(n_long, n_rec), len(d)))
+    sr, sl = _stats(rec), _stats(long)
+    if sr is None and sl is None:
         return None
-    share_1 = float(np.clip(gol_1 / gol_ft, 0.28, 0.48))
-    return {
-        "n": int(len(d)),
+    if sr is None:
+        sr = sl
+    if sl is None:
+        sl = sr
+
+    # 70% recente / 30% finestra lunga (allinea al "si segna di più ora")
+    w_rec = 0.70
+    def blend(a, b):
+        return w_rec * a + (1 - w_rec) * b
+
+    share_1 = float(np.clip(blend(sr["share_1"], sl["share_1"]), 0.25, 0.50))
+    out = {
+        "n": int(sr["n"]),
+        "n_long": int(sl["n"]),
         "share_1": share_1,
         "share_2": 1.0 - share_1,
-        "m_hthg": float(d["HTHG"].mean()),
-        "m_htag": float(d["HTAG"].mean()),
-        "m_shhg": float(d["SHHG"].mean()),
-        "m_shag": float(d["SHAG"].mean()),
-        "df_ht": d,  # per matrice empirica
+        "m_hthg": blend(sr["m_hthg"], sl["m_hthg"]),
+        "m_htag": blend(sr["m_htag"], sl["m_htag"]),
+        "m_shhg": blend(sr["m_shhg"], sl["m_shhg"]),
+        "m_shag": blend(sr["m_shag"], sl["m_shag"]),
+        "p00_1_rec": sr["p00_1"],
+        "p00_2_rec": sr["p00_2"],
+        "gol_1t_rec": sr["gol_1t"],
+        "gol_2t_rec": sr["gol_2t"],
+        # matrice empirica: solo recente (riflette il ritmo attuale)
+        "df_ht": rec,
     }
+    return out
 
 
 def matrice_empirica_tempi(df_ht, col_h: str, col_a: str, max_g: int = 5):
@@ -4257,14 +4302,21 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
             M_emp_2 = matrice_empirica_tempi(_st["df_ht"], "SHHG", "SHAG")
 
         # Con storico: peso empirico alto (tempi diversi). Senza: solo Poisson.
-        w_emp = 0.60 if da_storico else 0.0
+        w_emp = 0.65 if da_storico else 0.0
         top_1t, p_gol_1, p00_1, _ = top_esatti_tempo_misto(lh_1, la_1, M_emp_1, w_emp, 3)
         top_2t, p_gol_2, p00_2, _ = top_esatti_tempo_misto(lh_2, la_2, M_emp_2, w_emp, 3)
 
         if da_storico:
+            _extra = ""
+            if _st is not None:
+                _extra = (
+                    f" · recenti: gol/tempo `{_st.get('gol_1t_rec', 0):.2f}` / `{_st.get('gol_2t_rec', 0):.2f}`"
+                    f" · P00 1T `{_st.get('p00_1_rec', 0)*100:.0f}%`"
+                )
             st.caption(
-                f"Mix **modello + storico reale** HTHG/HTAG e 2T (FT−HT) su **{n_ht}** partite · "
-                f"share gol 1T **{sh1*100:.0f}%** / 2T **{sh2*100:.0f}%** · peso storico `{int(w_emp*100)}%`."
+                f"Mix **modello + storico recente** HTHG/HTAG (ultime **{n_ht}** gare, 70% peso) · "
+                f"share 1T **{sh1*100:.0f}%** / 2T **{sh2*100:.0f}%** · peso empirico `{int(w_emp*100)}%`"
+                + _extra
             )
         else:
             st.caption("Nessun HTHG/HTAG in storico (es. coppe): solo stima Poisson. Indicativo.")
