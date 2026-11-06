@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.48
+# Combo Master Grook — v4.49
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.48</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.49</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -927,6 +927,14 @@ def carica_storico(div: str, n_stagioni: int, giorno: str, chiave: str = ""):
     df = df.dropna(subset=["Date"])
     df["FTHG"] = df["FTHG"].astype(int)
     df["FTAG"] = df["FTAG"].astype(int)
+    if "HTHG" in df.columns and "HTAG" in df.columns:
+        df["HTHG"] = pd.to_numeric(df["HTHG"], errors="coerce")
+        df["HTAG"] = pd.to_numeric(df["HTAG"], errors="coerce")
+        ok_ht = df["HTHG"].notna() & df["HTAG"].notna()
+        df.loc[ok_ht, "HTHG"] = df.loc[ok_ht, "HTHG"].astype(int)
+        df.loc[ok_ht, "HTAG"] = df.loc[ok_ht, "HTAG"].astype(int)
+        df.loc[ok_ht, "SHHG"] = (df.loc[ok_ht, "FTHG"] - df.loc[ok_ht, "HTHG"]).astype(int)
+        df.loc[ok_ht, "SHAG"] = (df.loc[ok_ht, "FTAG"] - df.loc[ok_ht, "HTAG"]).astype(int)
     return df.sort_values("Date").reset_index(drop=True)
 
 
@@ -3769,6 +3777,73 @@ def genera_commento_scheda(casa, trasf, syn, mk, mg, lh, la, ancorata: bool) -> 
     return " ".join(frasi)
 
 
+
+def stat_tempi_da_storico(df):
+    """Share gol 1T e medie da HTHG/HTAG. None se dati insufficienti."""
+    if df is None or df.empty:
+        return None
+    need = {"HTHG", "HTAG", "FTHG", "FTAG"}
+    if not need.issubset(df.columns):
+        return None
+    d = df.dropna(subset=["HTHG", "HTAG", "FTHG", "FTAG"]).copy()
+    if len(d) < 60:
+        return None
+    for c in ("HTHG", "HTAG", "FTHG", "FTAG"):
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+    d = d.dropna(subset=["HTHG", "HTAG", "FTHG", "FTAG"])
+    d["SHHG"] = d["FTHG"] - d["HTHG"]
+    d["SHAG"] = d["FTAG"] - d["HTAG"]
+    d = d[(d["SHHG"] >= 0) & (d["SHAG"] >= 0)]
+    if len(d) < 60:
+        return None
+    gol_1 = float((d["HTHG"] + d["HTAG"]).sum())
+    gol_ft = float((d["FTHG"] + d["FTAG"]).sum())
+    if gol_ft <= 0:
+        return None
+    share_1 = float(np.clip(gol_1 / gol_ft, 0.28, 0.48))
+    return {
+        "n": int(len(d)),
+        "share_1": share_1,
+        "share_2": 1.0 - share_1,
+        "m_hthg": float(d["HTHG"].mean()),
+        "m_htag": float(d["HTAG"].mean()),
+        "m_shhg": float(d["SHHG"].mean()),
+        "m_shag": float(d["SHAG"].mean()),
+    }
+
+
+def lambda_tempi(lh, la, st):
+    """λ 1T/2T da share storico o fallback 0.37/0.63."""
+    lh, la = float(lh), float(la)
+    tot = max(lh + la, 0.2)
+    if st is None:
+        s1, s2 = 0.37, 0.63
+        lh1, la1 = lh * s1 * 1.06, la * s1 * 0.94
+        lh2, la2 = lh * s2 * 0.97, la * s2 * 1.03
+        da, n = False, 0
+    else:
+        s1, s2 = float(st["share_1"]), float(st["share_2"])
+        lh1, la1 = lh * s1, la * s1
+        lh2, la2 = lh * s2, la * s2
+        w = 0.30
+        lh1 = (1 - w) * lh1 + w * float(st["m_hthg"])
+        la1 = (1 - w) * la1 + w * float(st["m_htag"])
+        lh2 = (1 - w) * lh2 + w * float(st["m_shhg"])
+        la2 = (1 - w) * la2 + w * float(st["m_shag"])
+        da, n = True, int(st["n"])
+    t1, t2 = lh1 + la1, lh2 + la2
+    target1, target2 = tot * s1, tot * s2
+    if t1 > 0:
+        lh1, la1 = lh1 * (target1 / t1), la1 * (target1 / t1)
+    if t2 > 0:
+        lh2, la2 = lh2 * (target2 / t2), la2 * (target2 / t2)
+    return (
+        max(float(lh1), 0.05), max(float(la1), 0.05),
+        max(float(lh2), 0.05), max(float(la2), 0.05),
+        float(s1), float(s2), da, n,
+    )
+
+
 def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""):
     d = distribuzione(casa, trasf)
     lh, la = gol_attesi(d["M_gol"])
@@ -4123,20 +4198,25 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
             unsafe_allow_html=True,
         )
 
-    # 1T / 2T da storico HTHG/HTAG (football-data) se disponibile
+    # 1T / 2T da storico HTHG/HTAG
+    st.markdown("#### ⏱️ Risultato esatto più probabile · tempi")
     try:
-        _lh = float(d.get("lh") or lh)
-        _la = float(d.get("la") or la)
-        _st = stat_tempi_da_storico(df_storico)
+        _lh = float(d.get("lh") if d.get("lh") is not None else lh)
+        _la = float(d.get("la") if d.get("la") is not None else la)
+        try:
+            _df_ht = df_storico
+        except NameError:
+            _df_ht = None
+        _st = stat_tempi_da_storico(_df_ht)
         lh_1, la_1, lh_2, la_2, sh1, sh2, da_storico, n_ht = lambda_tempi(_lh, _la, _st)
 
         def _mat_tempo(lh_t, la_t):
-            Mh = matrice_punteggi(lh_t, la_t, 0.0)
+            Mh = matrice_punteggi(max(lh_t, 0.05), max(la_t, 0.05), 0.0)
             flat_t = sorted(
                 (
-                    (i, j, float(Mh[i, j]))
-                    for i in range(min(Mh.shape[0], 6))
-                    for j in range(min(Mh.shape[1], 6))
+                    (ii, jj, float(Mh[ii, jj]))
+                    for ii in range(min(Mh.shape[0], 6))
+                    for jj in range(min(Mh.shape[1], 6))
                 ),
                 key=lambda t: t[2],
                 reverse=True,
@@ -4147,17 +4227,14 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
         top_1t, p_gol_1, p00_1 = _mat_tempo(lh_1, la_1)
         top_2t, p_gol_2, p00_2 = _mat_tempo(lh_2, la_2)
 
-        st.markdown("#### ⏱️ Risultato esatto più probabile · tempi")
         if da_storico:
             st.caption(
-                f"Calibrato sullo storico **HTHG/HTAG** della lega ({n_ht} partite): "
-                f"share gol 1T **{sh1*100:.0f}%** · 2T **{sh2*100:.0f}%**. "
-                "2T = FT−HT. Indicativo (Poisson sui λ del modello × share reale)."
+                f"Calibrato sullo storico **HTHG/HTAG** ({n_ht} partite): "
+                f"share 1T **{sh1*100:.0f}%** · 2T **{sh2*100:.0f}%**. 2T = FT−HT."
             )
         else:
-            st.caption(
-                "Nessuno storico tempi (es. coppe openfootball): fallback share ~37/63. Indicativo."
-            )
+            st.caption("Senza HTHG/HTAG (o pochi dati): fallback share ~37/63. Indicativo.")
+
         c1t, c2t = st.columns(2)
         with c1t:
             st.markdown("**1° tempo**")
@@ -4168,8 +4245,8 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
             if top_1t:
                 i0, j0, p0 = top_1t[0]
                 st.success(f"Più probabile: **{i0} - {j0}** ({p0*100:.1f}%)")
-                for rank, (i, j, p) in enumerate(top_1t[:3], 1):
-                    st.caption(f"{rank}°. {i}-{j} · {p*100:.1f}%")
+                for rank, (ii, jj, pp) in enumerate(top_1t[:3], 1):
+                    st.caption(f"{rank}°. {ii}-{jj} · {pp*100:.1f}%")
         with c2t:
             st.markdown("**2° tempo**")
             st.caption(
@@ -4179,17 +4256,17 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
             if top_2t:
                 i0, j0, p0 = top_2t[0]
                 st.success(f"Più probabile: **{i0} - {j0}** ({p0*100:.1f}%)")
-                for rank, (i, j, p) in enumerate(top_2t[:3], 1):
-                    st.caption(f"{rank}°. {i}-{j} · {p*100:.1f}%")
+                for rank, (ii, jj, pp) in enumerate(top_2t[:3], 1):
+                    st.caption(f"{rank}°. {ii}-{jj} · {pp*100:.1f}%")
         if top_1t and top_2t:
             a, b = top_1t[0][:2], top_2t[0][:2]
             st.caption(
                 f"1T **{a[0]}-{a[1]}** · 2T **{b[0]}-{b[1]}** · "
                 f"gol attesi {lh_1+la_1:.2f} → {lh_2+la_2:.2f}"
-                + (" · fonte: storico HTHG/HTAG" if da_storico else " · fonte: fallback")
+                + (" · storico HTHG/HTAG" if da_storico else " · fallback")
             )
-    except Exception:
-        pass
+    except Exception as _e_ht:
+        st.caption(f"Tempi non disponibili: {type(_e_ht).__name__}: {_e_ht}")
 
     # Marcatori / ammoniti (indicativo, da API-Football stats — non dal modello Dixon-Coles)
     _af_key = api_key or ""
