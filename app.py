@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.45
+# Combo Master Grook — v4.48
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.45</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.48</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -2157,8 +2157,8 @@ def sintesi_pronostico(M):
             p[k] = float(Mt[tt == k].sum())
         return _fasce(p, bande_ht)
 
-    mg_1t = _mg_tempo(0.45)
-    mg_2t = _mg_tempo(0.55)
+    mg_1t = _mg_tempo(0.37)
+    mg_2t = _mg_tempo(0.63)
     casa_s, osp_s = _stretta(mg_casa), _stretta(mg_osp)
     t1_s, t2_s = _stretta(mg_1t), _stretta(mg_2t)
     return {
@@ -4123,47 +4123,71 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
             unsafe_allow_html=True,
         )
 
-    # Risultato esatto più probabile 1° e 2° tempo (stima 45% / 55% dei λ, senza storico tempi)
+    # 1T / 2T da storico HTHG/HTAG (football-data) se disponibile
     try:
         _lh = float(d.get("lh") or lh)
         _la = float(d.get("la") or la)
-        _rho = float(modello.get("rho") or 0.0)
+        _st = stat_tempi_da_storico(df_storico)
+        lh_1, la_1, lh_2, la_2, sh1, sh2, da_storico, n_ht = lambda_tempi(_lh, _la, _st)
 
-        def _top_esatti_tempo(share: float, n: int = 3):
-            Mh = matrice_punteggi(
-                max(_lh * share, 0.05),
-                max(_la * share, 0.05),
-                0.0,  # rho poco sensato sui tempi
-            )
+        def _mat_tempo(lh_t, la_t):
+            Mh = matrice_punteggi(lh_t, la_t, 0.0)
             flat_t = sorted(
-                ((i, j, float(Mh[i, j])) for i in range(min(Mh.shape[0], 6)) for j in range(min(Mh.shape[1], 6))),
+                (
+                    (i, j, float(Mh[i, j]))
+                    for i in range(min(Mh.shape[0], 6))
+                    for j in range(min(Mh.shape[1], 6))
+                ),
                 key=lambda t: t[2],
                 reverse=True,
-            )[:n]
-            return flat_t
+            )[:4]
+            p00 = float(Mh[0, 0]) if Mh.shape[0] else 0.0
+            return flat_t, 1.0 - p00, p00
 
-        top_1t = _top_esatti_tempo(0.45, 3)
-        top_2t = _top_esatti_tempo(0.55, 3)
-        st.markdown("#### ⏱️ Risultato esatto più probabile · tempi · indicativo")
-        st.caption(
-            "Stima: ~45% dei gol attesi nel 1° tempo e ~55% nel 2°. "
-            "Non c'è storico dei tempi: solo ripartizione dei λ. Indicativo."
-        )
+        top_1t, p_gol_1, p00_1 = _mat_tempo(lh_1, la_1)
+        top_2t, p_gol_2, p00_2 = _mat_tempo(lh_2, la_2)
+
+        st.markdown("#### ⏱️ Risultato esatto più probabile · tempi")
+        if da_storico:
+            st.caption(
+                f"Calibrato sullo storico **HTHG/HTAG** della lega ({n_ht} partite): "
+                f"share gol 1T **{sh1*100:.0f}%** · 2T **{sh2*100:.0f}%**. "
+                "2T = FT−HT. Indicativo (Poisson sui λ del modello × share reale)."
+            )
+        else:
+            st.caption(
+                "Nessuno storico tempi (es. coppe openfootball): fallback share ~37/63. Indicativo."
+            )
         c1t, c2t = st.columns(2)
         with c1t:
             st.markdown("**1° tempo**")
+            st.caption(
+                f"Gol attesi **{lh_1:.2f} – {la_1:.2f}** · "
+                f"P(≥1 gol) `{p_gol_1*100:.0f}%` · P(0-0) `{p00_1*100:.0f}%`"
+            )
             if top_1t:
                 i0, j0, p0 = top_1t[0]
                 st.success(f"Più probabile: **{i0} - {j0}** ({p0*100:.1f}%)")
-                for rank, (i, j, p) in enumerate(top_1t, 1):
+                for rank, (i, j, p) in enumerate(top_1t[:3], 1):
                     st.caption(f"{rank}°. {i}-{j} · {p*100:.1f}%")
         with c2t:
             st.markdown("**2° tempo**")
+            st.caption(
+                f"Gol attesi **{lh_2:.2f} – {la_2:.2f}** · "
+                f"P(≥1 gol) `{p_gol_2*100:.0f}%` · P(0-0) `{p00_2*100:.0f}%`"
+            )
             if top_2t:
                 i0, j0, p0 = top_2t[0]
                 st.success(f"Più probabile: **{i0} - {j0}** ({p0*100:.1f}%)")
-                for rank, (i, j, p) in enumerate(top_2t, 1):
+                for rank, (i, j, p) in enumerate(top_2t[:3], 1):
                     st.caption(f"{rank}°. {i}-{j} · {p*100:.1f}%")
+        if top_1t and top_2t:
+            a, b = top_1t[0][:2], top_2t[0][:2]
+            st.caption(
+                f"1T **{a[0]}-{a[1]}** · 2T **{b[0]}-{b[1]}** · "
+                f"gol attesi {lh_1+la_1:.2f} → {lh_2+la_2:.2f}"
+                + (" · fonte: storico HTHG/HTAG" if da_storico else " · fonte: fallback")
+            )
     except Exception:
         pass
 
