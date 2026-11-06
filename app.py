@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.43
+# Combo Master Grook — v4.45
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.43</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.45</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -3297,6 +3297,20 @@ st.sidebar.info(
     "Aggiungi a Home (Safari → Condividi → Aggiungi a Home) per usarla come app. "
     "Wi‑Fi al primo carico."
 )
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📒 Diario pick")
+_diary = st.session_state.get("diario_pick") or []
+st.sidebar.caption(f"{len(_diary)} pick salvati (sessione / finché non cancelli).")
+if _diary:
+    st.sidebar.dataframe(pd.DataFrame(_diary), use_container_width=True, hide_index=True)
+    if st.sidebar.button("Svuota diario"):
+        st.session_state["diario_pick"] = []
+        st.rerun()
+    # export csv
+    _csv = pd.DataFrame(_diary).to_csv(index=False)
+    st.sidebar.download_button("Scarica diario CSV", _csv, file_name="diario_combo_master.csv", mime="text/csv")
+else:
+    st.sidebar.caption("Dalla lista: bottone **+** su una riga GIOCA per aggiungere.")
 st.sidebar.caption(
     "Gratis: quote da football-data.co.uk/fixtures.csv (2×/settimana) "
     "+ API-Football topscorers (1–2 req/lega). "
@@ -4109,6 +4123,50 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
             unsafe_allow_html=True,
         )
 
+    # Risultato esatto più probabile 1° e 2° tempo (stima 45% / 55% dei λ, senza storico tempi)
+    try:
+        _lh = float(d.get("lh") or lh)
+        _la = float(d.get("la") or la)
+        _rho = float(modello.get("rho") or 0.0)
+
+        def _top_esatti_tempo(share: float, n: int = 3):
+            Mh = matrice_punteggi(
+                max(_lh * share, 0.05),
+                max(_la * share, 0.05),
+                0.0,  # rho poco sensato sui tempi
+            )
+            flat_t = sorted(
+                ((i, j, float(Mh[i, j])) for i in range(min(Mh.shape[0], 6)) for j in range(min(Mh.shape[1], 6))),
+                key=lambda t: t[2],
+                reverse=True,
+            )[:n]
+            return flat_t
+
+        top_1t = _top_esatti_tempo(0.45, 3)
+        top_2t = _top_esatti_tempo(0.55, 3)
+        st.markdown("#### ⏱️ Risultato esatto più probabile · tempi · indicativo")
+        st.caption(
+            "Stima: ~45% dei gol attesi nel 1° tempo e ~55% nel 2°. "
+            "Non c'è storico dei tempi: solo ripartizione dei λ. Indicativo."
+        )
+        c1t, c2t = st.columns(2)
+        with c1t:
+            st.markdown("**1° tempo**")
+            if top_1t:
+                i0, j0, p0 = top_1t[0]
+                st.success(f"Più probabile: **{i0} - {j0}** ({p0*100:.1f}%)")
+                for rank, (i, j, p) in enumerate(top_1t, 1):
+                    st.caption(f"{rank}°. {i}-{j} · {p*100:.1f}%")
+        with c2t:
+            st.markdown("**2° tempo**")
+            if top_2t:
+                i0, j0, p0 = top_2t[0]
+                st.success(f"Più probabile: **{i0} - {j0}** ({p0*100:.1f}%)")
+                for rank, (i, j, p) in enumerate(top_2t, 1):
+                    st.caption(f"{rank}°. {i}-{j} · {p*100:.1f}%")
+    except Exception:
+        pass
+
     # Marcatori / ammoniti (indicativo, da API-Football stats — non dal modello Dixon-Coles)
     _af_key = api_key or ""
     _div_now = div_sel or ""
@@ -4218,20 +4276,60 @@ with tab_calendario:
                 if syn:
                     con_quote = bool(d_r and d_r.get("ancorata"))
                     badge = "🟢 con quote" if con_quote else "🔵 modello"
+                    # Via di mezzo: GIOCA / STUDIO in lista
+                    _pb = (d_r or {}).get("p_book")
+                    _sq = None
+                    if _pb is not None:
+                        try:
+                            _sq = max(
+                                (("1", float(_pb[0])), ("X", float(_pb[1])), ("2", float(_pb[2]))),
+                                key=lambda t: t[1],
+                            )[0]
+                        except Exception:
+                            _sq = None
+                    try:
+                        _mk_l = mercati(d_r["M_1x2"])
+                        _mg_l = mercati(d_r["M_gol"])
+                        _cg = consiglio_cosa_giocare(
+                            div, syn, _mk_l, _mg_l, con_quote, _pb, _sq,
+                        )
+                    except Exception:
+                        _cg = {"azione": "STUDIO", "testo": ""}
+                    if _cg.get("azione") == "GIOCA":
+                        badge_v = "🎯 GIOCA"
+                    else:
+                        badge_v = "📘 STUDIO"
                     st.markdown(
-                        f"{badge} · **{syn['segno']}** "
+                        f"{badge_v} · {badge} · **{syn['segno']}** "
                         f"· 1 `{syn['p1']*100:.0f}%` · X `{syn['px']*100:.0f}%` · 2 `{syn['p2']*100:.0f}%` "
                         f"· **{syn['ou']}** `{syn['ou_p']*100:.0f}%`"
                     )
                     st.caption(f"gol attesi {gh:.2f}–{ga:.2f} · dettagli in Scheda")
                 else:
                     st.caption("Probabilità non calcolabili")
+                    _cg = None
             with c_btn:
-                if st.button("Scheda", key=f"btn_{div}_{giornata_sel}_{idx}"):
-                    st.session_state["match_attivo"] = {
-                        "div": div, "casa": casa, "trasf": trasf,
-                        "data": row["Data"], "ora": row["Ora"],
-                    }
+                b1, b2 = st.columns(2)
+                with b1:
+                    if st.button("Scheda", key=f"btn_{div}_{giornata_sel}_{idx}"):
+                        st.session_state["match_attivo"] = {
+                            "div": div, "casa": casa, "trasf": trasf,
+                            "data": row["Data"], "ora": row["Ora"],
+                        }
+                with b2:
+                    if syn and _cg and _cg.get("azione") == "GIOCA":
+                        if st.button("+", key=f"diary_{div}_{giornata_sel}_{idx}", help="Aggiungi al diario"):
+                            if "diario_pick" not in st.session_state:
+                                st.session_state["diario_pick"] = []
+                            st.session_state["diario_pick"].append({
+                                "data": str(row.get("Data", "")),
+                                "lega": div,
+                                "partita": f"{casa} - {trasf}",
+                                "pick": _cg.get("testo", "")[:120],
+                                "segno": syn.get("segno"),
+                                "p": round(float({"1": syn["p1"], "X": syn["px"], "2": syn["p2"]}[syn["segno"]]) * 100, 1),
+                            })
+                            st.toast("Aggiunto al diario")
 
     # Se non ci sono partite future in calendario: selettore manuale Scheda
     _cal_ok = calendario is not None and not calendario.empty
