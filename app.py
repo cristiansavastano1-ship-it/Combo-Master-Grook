@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.53
+# Combo Master Grook — v4.54
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.53</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.54</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -3886,7 +3886,8 @@ def lambda_tempi(lh, la, st):
         da, n = False, 0
     else:
         s1, s2 = float(st["share_1"]), float(st["share_2"])
-        w = 0.35
+        # poco ritiro sulle medie lega: i λ della partita devono differenziare
+        w = 0.12
         lh1 = (1 - w) * lh * s1 + w * float(st["m_hthg"])
         la1 = (1 - w) * la * s1 + w * float(st["m_htag"])
         lh2 = (1 - w) * lh * s2 + w * float(st["m_shhg"])
@@ -4085,7 +4086,7 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
         if _st0 is not None and _st0.get("df_ht") is not None:
             _Me1 = matrice_empirica_tempi(_st0["df_ht"], "HTHG", "HTAG")
             _Me2 = matrice_empirica_tempi(_st0["df_ht"], "SHHG", "SHAG")
-        _w0 = 0.65 if _da0 else 0.0
+        _w0 = 0.25 if _da0 else 0.0
         _top1, _, _, _ = top_esatti_tempo_misto(_l1h, _l1a, _Me1, _w0, 3)
         _top2, _, _, _ = top_esatti_tempo_misto(_l2h, _l2a, _Me2, _w0, 3)
         st.markdown("#### ⏱️ Risultato esatto 1° e 2° tempo · indicativo")
@@ -4400,7 +4401,7 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
             M_emp_2 = matrice_empirica_tempi(_st["df_ht"], "SHHG", "SHAG")
 
         # Con storico: peso empirico alto (tempi diversi). Senza: solo Poisson.
-        w_emp = 0.65 if da_storico else 0.0
+        w_emp = 0.25 if da_storico else 0.0
         top_1t, p_gol_1, p00_1, _ = top_esatti_tempo_misto(lh_1, la_1, M_emp_1, w_emp, 3)
         top_2t, p_gol_2, p00_2, _ = top_esatti_tempo_misto(lh_2, la_2, M_emp_2, w_emp, 3)
 
@@ -4413,7 +4414,7 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
                 )
             st.caption(
                 f"Mix **modello + storico recente** HTHG/HTAG (ultime **{n_ht}** gare, 70% peso) · "
-                f"share 1T **{sh1*100:.0f}%** / 2T **{sh2*100:.0f}%** · peso empirico `{int(w_emp*100)}%`"
+                f"share 1T **{sh1*100:.0f}%** / 2T **{sh2*100:.0f}%** · peso matrice lega `{int(w_emp*100)}%` (resto = λ partita)"
                 + _extra
             )
         else:
