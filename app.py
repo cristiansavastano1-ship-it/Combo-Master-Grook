@@ -1,4 +1,4 @@
-# Combo Master Grook — v4.51
+# Combo Master Grook — v4.53
 # Dixon-Coles + walk-forward + calibrazione + confronto quote
 # ClubElo offline (data/clubelo.csv) + Understat xG offline
 
@@ -160,7 +160,7 @@ st.markdown(
                 text-align: center; margin-bottom: 18px;
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4);">
         <h1 style="color:#f8fafc; font-weight:800; font-size:1.95rem; margin:0; letter-spacing:-0.5px;">
-            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.51</span>
+            ⚽ COMBO MASTER GROOK <span style="font-size:0.85rem; color:#818cf8; font-weight:600;">v4.53</span>
         </h1>
         <p style="color:#94a3b8; font-size:0.92rem; margin-top:6px;">
             Dixon-Coles · walk-forward · calibrazione · confronto quote reali
@@ -4070,6 +4070,42 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
     p3c.metric("Combo gol", syn["combo"], f"{syn['combo_p']*100:.0f}%")
     p4c.metric("Combo O/U", syn["ou"].split("+ ", 1)[-1], f"{syn['ou_p']*100:.0f}%")
     p5c.metric("Multigol", syn["mg"], f"{syn['mg_p']*100:.0f}%")
+
+    # Risultato esatto 1° e 2° tempo (sintesi in alto)
+    try:
+        _lh0 = float(d["lh"]) if d.get("lh") is not None else float(lh)
+        _la0 = float(d["la"]) if d.get("la") is not None else float(la)
+        try:
+            _df0 = df_storico
+        except NameError:
+            _df0 = None
+        _st0 = stat_tempi_da_storico(_df0)
+        _l1h, _l1a, _l2h, _l2a, _sh1, _sh2, _da0, _n0 = lambda_tempi(_lh0, _la0, _st0)
+        _Me1 = _Me2 = None
+        if _st0 is not None and _st0.get("df_ht") is not None:
+            _Me1 = matrice_empirica_tempi(_st0["df_ht"], "HTHG", "HTAG")
+            _Me2 = matrice_empirica_tempi(_st0["df_ht"], "SHHG", "SHAG")
+        _w0 = 0.65 if _da0 else 0.0
+        _top1, _, _, _ = top_esatti_tempo_misto(_l1h, _l1a, _Me1, _w0, 3)
+        _top2, _, _, _ = top_esatti_tempo_misto(_l2h, _l2a, _Me2, _w0, 3)
+        st.markdown("#### ⏱️ Risultato esatto 1° e 2° tempo · indicativo")
+        e1, e2, e3 = st.columns(3)
+        if _top1:
+            i0, j0, p0 = _top1[0]
+            e1.metric("1° tempo (esatto)", f"{i0} - {j0}", f"{p0*100:.1f}%")
+            e1.caption(" · ".join(f"{a}-{b} {p*100:.0f}%" for a, b, p in _top1[:3]))
+        if _top2:
+            i0, j0, p0 = _top2[0]
+            e2.metric("2° tempo (esatto)", f"{i0} - {j0}", f"{p0*100:.1f}%")
+            e2.caption(" · ".join(f"{a}-{b} {p*100:.0f}%" for a, b, p in _top2[:3]))
+        e3.caption(
+            ("Storico recente HTHG/HTAG · " if _da0 else "Stima Poisson · ")
+            + f"share 1T {_sh1*100:.0f}% / 2T {_sh2*100:.0f}%. "
+            "Dettaglio più sotto in Scheda."
+        )
+    except Exception:
+        pass
+
     # Over/Goal in evidenza subito sotto il pronostico
     over25 = mg["over2.5"] if d["ancorata"] else prob_calibrata(mg["over2.5"], cal, "over25")
     btts = mg["btts"] if d["ancorata"] else prob_calibrata(mg["btts"], cal, "btts")
@@ -4110,6 +4146,68 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
                 st.caption(
                     f"1 `{info['p1']*100:.0f}%` · X `{info['px']*100:.0f}%` · 2 `{info['p2']*100:.0f}%`"
                 )
+
+    # Corner / cartellini per tempo + stessa squadra in entrambi i tempi
+    try:
+        _cdpt = predici_chi_di_piu_tempi(df_storico, casa, trasf)
+    except Exception:
+        _cdpt = {}
+    if _cdpt:
+        st.markdown("#### 🟨 Corner e cartellini · 1° / 2° tempo · indicativo")
+        st.caption(
+            "Stima da medie partita (HC/HY) ripartite sui tempi: corner ~48/52, cartellini ~42/58. "
+            "**Entrambi i tempi** = stessa squadra in vantaggio in 1T e in 2T (indipendenza). "
+            "Non è un prop giocatore (tipo “Xhaka ammonito”). Nessuno storico per-tempo nei CSV."
+        )
+        for label, pack in _cdpt.items():
+            st.markdown(f"**{label}**")
+            t1, t2, both = pack["1T"], pack["2T"], pack["both"]
+            c1, c2, c3 = st.columns(3)
+            def _tit(seg):
+                if seg == "X":
+                    return "X · Pari"
+                if seg == "1":
+                    return f"1 · {casa}"
+                if seg == "2":
+                    return f"2 · {trasf}"
+                return "—"
+            with c1:
+                st.metric(
+                    "1° tempo",
+                    _tit(t1["segno"]),
+                    f"{t1['casa']:.2f} vs {t1['trasf']:.2f}",
+                )
+                st.caption(
+                    f"1 `{t1['p1']*100:.0f}%` · X `{t1['px']*100:.0f}%` · 2 `{t1['p2']*100:.0f}%`"
+                )
+            with c2:
+                st.metric(
+                    "2° tempo",
+                    _tit(t2["segno"]),
+                    f"{t2['casa']:.2f} vs {t2['trasf']:.2f}",
+                )
+                st.caption(
+                    f"1 `{t2['p1']*100:.0f}%` · X `{t2['px']*100:.0f}%` · 2 `{t2['p2']*100:.0f}%`"
+                )
+            with c3:
+                if both["segno"] in ("1", "2"):
+                    nome = casa if both["segno"] == "1" else trasf
+                    st.metric(
+                        "Entrambi i tempi",
+                        f"{both['segno']} · {nome}",
+                        f"P≈{both['best_p']*100:.0f}%",
+                    )
+                else:
+                    st.metric("Entrambi i tempi", "Nessun favorito chiaro", f"max P≈{both['best_p']*100:.0f}%")
+                st.caption(
+                    f"Casa entrambi `{both['p_casa']*100:.0f}%` · "
+                    f"Trasf entrambi `{both['p_trasf']*100:.0f}%` · "
+                    f"misto/pari `{both['p_altro']*100:.0f}%`"
+                )
+        st.caption(
+            "Mercati tipo tipster (cartellino giocatore, falli U/O, multigol custom) "
+            "richiedono dati individuali: non disponibili in modo stabile e gratis qui."
+        )
 
     st.divider()
 
@@ -4285,7 +4383,7 @@ def mostra_analisi(casa, trasf, data, ora, div_sel="", api_key="", giorno_sel=""
         )
 
     # 1T / 2T: mix modello + frequenze empiriche HTHG/HTAG e FT-HT
-    st.markdown("#### ⏱️ Risultato esatto più probabile · tempi")
+    st.markdown("#### ⏱️ Dettaglio risultato esatto 1° tempo e 2° tempo")
     try:
         _lh = float(d["lh"]) if d.get("lh") is not None else float(lh)
         _la = float(d["la"]) if d.get("la") is not None else float(la)
